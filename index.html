@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Journal">
+<meta name="theme-color" content="#0d1117">
+<title>Trading Journal</title>
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
+<link rel="icon" href="./icons/icon-192.png">
+<link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+
+<main id="app">
+
+  <!-- ===== Account view ===== -->
+  <section id="view-account" class="view active">
+    <header class="view-header">
+      <h1>Account</h1>
+    </header>
+    <p class="live-banner" hidden>Connection to MT5 lost — check the Mac</p>
+
+    <!-- live MT5 mode -->
+    <div id="account-live" hidden>
+      <div class="card">
+        <div class="live-header">
+          <span id="live-broker" class="live-broker"></span>
+          <span id="live-pill" class="live-pill"><span id="live-age">Live</span></span>
+        </div>
+      </div>
+      <p class="caption">From your live MT5 account (30-day deal history).</p>
+      <div id="account-live-stats" class="stats-grid"></div>
+    </div>
+
+    <!-- manual journal mode -->
+    <div id="account-manual">
+    <p class="caption">Your journal is private and stored only on this device. Enter your account's starting balance, then log trades from the History tab.</p>
+    <div class="card">
+      <h2>Details</h2>
+      <label class="field">
+        <span>Account name</span>
+        <input id="acc-name" type="text" placeholder="Main account" autocomplete="off">
+      </label>
+      <div class="field-row">
+        <label class="field">
+          <span>Starting balance</span>
+          <input id="acc-balance" type="number" step="any" inputmode="decimal" placeholder="10000">
+        </label>
+        <label class="field">
+          <span>Currency</span>
+          <input id="acc-currency" type="text" maxlength="6" placeholder="USD" autocapitalize="characters" autocomplete="off">
+        </label>
+      </div>
+      <button id="btn-save-account" class="btn">Save</button>
+    </div>
+    <p class="caption">Computed from closed trades only.</p>
+    <div id="account-stats" class="stats-grid"></div>
+    </div>
+  </section>
+
+  <!-- ===== History view ===== -->
+  <section id="view-trades" class="view">
+    <header class="view-header">
+      <h1>History</h1>
+    </header>
+    <div class="roi-hero">
+      <div id="roi-value" class="roi-value flat">—</div>
+      <div id="roi-sub" class="roi-sub">Set a starting balance in Account</div>
+    </div>
+    <p id="history-caption" class="caption" hidden>Last 30 days from MT5 deal history</p>
+    <p class="live-banner" hidden>Connection to MT5 lost — check the Mac</p>
+    <div class="filter-bar">
+      <input id="search" type="search" placeholder="Search symbol, setup, notes…" autocomplete="off">
+      <div class="chips" id="outcome-chips">
+        <button class="chip active" data-outcome="ALL">All</button>
+        <button class="chip" data-outcome="OPEN">Open</button>
+        <button class="chip" data-outcome="WIN">Win</button>
+        <button class="chip" data-outcome="LOSS">Loss</button>
+      </div>
+    </div>
+    <ul id="trade-list" class="trade-list"></ul>
+    <p id="trades-empty" class="empty-state" hidden>No trades yet. Tap + to log your first trade.</p>
+    <button id="fab" class="fab" aria-label="Add trade">+</button>
+  </section>
+
+  <!-- ===== Stats view ===== -->
+  <section id="view-stats" class="view">
+    <header class="view-header">
+      <h1>Stats</h1>
+    </header>
+    <p class="caption" id="stats-caption">Computed from closed trades only.</p>
+    <div id="stats-grid" class="stats-grid"></div>
+    <div class="card">
+      <h2>Equity curve</h2>
+      <canvas id="equity-canvas" class="equity-canvas"></canvas>
+    </div>
+    <div class="card">
+      <h2>By setup</h2>
+      <table id="setup-table" class="setup-table">
+        <thead><tr><th>Setup</th><th>#</th><th>Win%</th><th>Net P&amp;L</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <p id="setup-empty" class="empty-state" hidden>No closed trades yet.</p>
+    </div>
+  </section>
+
+</main>
+
+<!-- ===== Bottom tab bar ===== -->
+<nav class="tabbar">
+  <button class="tab active" data-view="view-account" aria-label="Account">
+    <span class="tab-icon">◈</span><span>Account</span>
+  </button>
+  <button class="tab" data-view="view-trades" aria-label="History">
+    <span class="tab-icon">≡</span><span>History</span>
+  </button>
+  <button class="tab" data-view="view-stats" aria-label="Stats">
+    <span class="tab-icon">∿</span><span>Stats</span>
+  </button>
+</nav>
+
+<!-- ===== Trade form sheet ===== -->
+<div id="sheet" class="sheet" hidden>
+  <form id="trade-form" class="sheet-inner" novalidate>
+    <header class="sheet-header">
+      <button type="button" id="btn-cancel" class="btn-text">Cancel</button>
+      <h2 id="sheet-title">New trade</h2>
+      <button type="submit" class="btn-text btn-save">Save</button>
+    </header>
+
+    <div class="form-body">
+      <div id="annotate-summary" class="annotate-summary" hidden></div>
+
+      <label class="field manual-only">
+        <span>Symbol *</span>
+        <input name="symbol" type="text" required placeholder="AAPL" autocapitalize="characters" autocomplete="off">
+      </label>
+
+      <div class="field manual-only">
+        <span>Direction</span>
+        <div class="seg" id="direction-seg">
+          <button type="button" class="seg-btn active" data-dir="LONG">Long</button>
+          <button type="button" class="seg-btn" data-dir="SHORT">Short</button>
+        </div>
+      </div>
+
+      <label class="field manual-only">
+        <span>Date *</span>
+        <input name="date" type="datetime-local" required>
+      </label>
+
+      <div class="field-row">
+        <label class="field manual-only">
+          <span>Entry *</span>
+          <input name="entry" type="number" step="any" inputmode="decimal" required placeholder="0.00">
+        </label>
+        <label class="field manual-only">
+          <span>Exit <em>(blank = open)</em></span>
+          <input name="exit" type="number" step="any" inputmode="decimal" placeholder="—">
+        </label>
+      </div>
+
+      <div class="field-row">
+        <label class="field manual-only">
+          <span>Size *</span>
+          <input name="size" type="number" step="any" inputmode="decimal" required placeholder="1">
+        </label>
+        <label class="field">
+          <span>Stop loss</span>
+          <input name="stopLoss" type="number" step="any" inputmode="decimal" placeholder="—">
+        </label>
+      </div>
+
+      <div class="field-row">
+        <label class="field manual-only">
+          <span>Fees</span>
+          <input name="fees" type="number" step="any" inputmode="decimal" placeholder="0">
+        </label>
+        <label class="field">
+          <span>Setup</span>
+          <input name="setup" type="text" list="setup-list" placeholder="e.g. breakout" autocomplete="off">
+          <datalist id="setup-list"></datalist>
+        </label>
+      </div>
+
+      <label class="field">
+        <span>Notes</span>
+        <textarea name="notes" rows="3" placeholder="What was the thesis? How did it go?"></textarea>
+      </label>
+
+      <div class="field">
+        <span>Screenshot</span>
+        <div class="screenshot-row">
+          <label class="btn btn-secondary file-btn">
+            <span id="screenshot-label">Choose image…</span>
+            <input id="screenshot-input" type="file" accept="image/*" hidden>
+          </label>
+          <button type="button" id="btn-remove-screenshot" class="btn-text" hidden>Remove</button>
+        </div>
+        <img id="screenshot-preview" class="screenshot-preview" alt="" hidden>
+      </div>
+
+      <div class="live-preview" id="live-preview">
+        <div><span>P&amp;L</span><strong id="pv-pnl">—</strong></div>
+        <div><span>R</span><strong id="pv-r">—</strong></div>
+        <div><span>Outcome</span><strong id="pv-outcome">—</strong></div>
+      </div>
+
+      <button type="button" id="btn-delete" class="btn btn-danger" hidden>Delete trade</button>
+    </div>
+  </form>
+</div>
+
+<!-- image viewer -->
+<div id="img-viewer" class="img-viewer" hidden>
+  <img id="img-viewer-img" alt="Screenshot">
+</div>
+
+<script type="module" src="./app.js"></script>
+</body>
+</html>
