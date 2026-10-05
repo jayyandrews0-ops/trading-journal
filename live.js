@@ -111,6 +111,72 @@ export function buildPositions(deals, openPositions) {
   return out;
 }
 
+/* ---------- equity curve ---------- */
+
+// Index-based equity series for the live account: point 0 is the balance at
+// the first closed trade, point i the balance after the i-th closed position
+// (closeTime order, delta = position net). Balance/credit deals on or before
+// the first close fold into the starting balance (so the anchor is the
+// capital trading started with); later ones fold in at the next trade's
+// index as 'deposit' mid-points (dotted step + hollow dot when drawn).
+// Nonzero realised-so-far net of OPEN/PARTIAL positions folds into the
+// final point, so the curve ends at the broker balance.
+export function liveEquitySeries(account, deals, openPositions) {
+  const positions = buildPositions(deals || [], openPositions);
+  const closed = positions
+    .filter((p) => p.status === 'CLOSED' && p.closeTime)
+    .sort((a, b) => a.closeTime.localeCompare(b.closeTime));
+  const openCost = positions
+    .filter((p) => p.status !== 'CLOSED')
+    .reduce((s, p) => s + (p.net || 0), 0);
+  const balanceDeals = (deals || [])
+    .filter((d) => (d.type === 2 || d.type === 3) && d.profit) // BALANCE / CREDIT
+    .map((d) => ({ time: parseBrokerTime(d.time), delta: d.profit }))
+    .sort((a, b) => a.time.localeCompare(b.time));
+
+  const posNet = closed.reduce((s, p) => s + (p.net || 0), 0);
+  const balNet = balanceDeals.reduce((s, d) => s + d.delta, 0);
+  const carried = (account ? account.balance : 0) - posNet - balNet - openCost;
+
+  const firstClose = closed.length ? closed[0].closeTime : null;
+  const pre = [], post = [];
+  for (const d of balanceDeals) {
+    (firstClose && d.time > firstClose ? post : pre).push(d);
+  }
+  const startValue = carried + pre.reduce((s, d) => s + d.delta, 0);
+  const label = !closed.length && !balanceDeals.length ? 'Balance'
+    : (Math.abs(carried) < 0.005 && pre.length && pre[0].delta > 0) ? 'Deposit'
+    : 'Start';
+
+  const points = [{ i: 0, value: startValue, kind: 'start' }];
+  let acc = startValue;
+  let di = 0;
+  for (let i = 1; i <= closed.length; i++) {
+    while (di < post.length && post[di].time <= closed[i - 1].closeTime) {
+      acc += post[di].delta;
+      points.push({ i, value: acc, kind: 'deposit', delta: post[di].delta });
+      di++;
+    }
+    acc += closed[i - 1].net || 0;
+    points.push({ i, value: acc, kind: 'trade', delta: closed[i - 1].net || 0 });
+  }
+  // Deposits after the last close fold at the final index.
+  const tailIdx = closed.length || 1;
+  while (di < post.length) {
+    acc += post[di].delta;
+    points.push({ i: tailIdx, value: acc, kind: 'deposit', delta: post[di].delta });
+    di++;
+  }
+  // Open/partial realised costs fold into the final point — never into the
+  // starting anchor (a lone start point gets a tail point at index 1).
+  if (Math.abs(openCost) >= 0.005) {
+    acc += openCost;
+    if (points.length > 1) points[points.length - 1].value += openCost;
+    else points.push({ i: 1, value: acc, kind: 'cost', delta: openCost });
+  }
+  return { label, points, end: acc };
+}
+
 // Account-level aggregates from account.json + the 30-day deal window.
 export function accountSummary(account, deals) {
   const list = deals || [];

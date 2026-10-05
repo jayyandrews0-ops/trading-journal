@@ -103,6 +103,63 @@ export function equitySeries(trades) {
   return closed.map((t) => { acc += tradeNet(t) ?? 0; return { date: tradeTime(t), value: acc }; });
 }
 
+/* ---------- balance curve ---------- */
+
+// Balance events are { time, delta, kind } — time a sortable string
+// ('YYYY-MM-DD' or 'YYYY-MM-DDTHH:MM:SS'), kind 'trade' | 'cost' | 'balance'.
+
+// Closed-trade balance events for the manual journal.
+export function manualBalanceEvents(trades) {
+  return trades.filter(isClosed)
+    .map((t) => ({ time: tradeTime(t), delta: tradeNet(t) ?? 0, kind: 'trade' }));
+}
+
+// Classic equity-curve points: index 0 is the starting balance, index i is
+// the balance after the i-th closed trade in time order.
+export function equityPoints(startBalance, deltas) {
+  const points = [{ i: 0, value: startBalance, kind: 'start' }];
+  let acc = startBalance;
+  (deltas || []).forEach((delta, k) => {
+    acc += delta;
+    points.push({ i: k + 1, value: acc, kind: 'trade', delta });
+  });
+  return points;
+}
+
+// "Nice" tick values covering [min, max]: the smallest 1/2/5 × 10^k step
+// that yields at most 5 ticks.
+export function niceTicks(min, max) {
+  if (!(isFinite(min) && isFinite(max))) return [];
+  if (min === max) return [min];
+  const span = max - min;
+  let pow = Math.pow(10, Math.floor(Math.log10(span)));
+  for (;;) {
+    for (const m of [1, 2, 5]) {
+      const step = m * pow;
+      const ticks = [];
+      for (let v = Math.ceil(min / step - 1e-9) * step; v <= max + step * 1e-9; v += step) {
+        ticks.push(+v.toFixed(12));
+      }
+      if (ticks.length <= 5) return ticks;
+    }
+    pow *= 10;
+  }
+}
+
+// Label step for trade-index x ticks: every trade when N ≤ 10, else the
+// smallest nice step (5/10/20/25/50 × 10^k) giving at most 6 labels.
+export function indexStep(n) {
+  if (n <= 10) return 1;
+  let pow = 1;
+  for (;;) {
+    for (const m of [5, 10, 20, 25, 50]) {
+      const step = m * pow;
+      if (Math.floor(n / step) <= 5) return step;
+    }
+    pow *= 10;
+  }
+}
+
 export function bySetup(trades) {
   const map = new Map();
   for (const t of trades.filter(isClosed)) {

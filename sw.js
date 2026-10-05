@@ -1,5 +1,5 @@
 // Service worker: cache-first app shell, network-first for page navigations.
-const CACHE_VERSION = 'trading-journal-v5';
+const CACHE_VERSION = 'trading-journal-v6';
 
 const APP_SHELL = [
   './',
@@ -8,6 +8,7 @@ const APP_SHELL = [
   './app.js',
   './db.js',
   './calc.js',
+  './live.js',
   './manifest.webmanifest',
   './icons/icon-192.png',
   './icons/icon-512.png',

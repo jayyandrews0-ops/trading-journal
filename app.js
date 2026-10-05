@@ -1,8 +1,9 @@
 // Trading Journal — UI wiring. Data in db.js (IndexedDB), math in calc.js,
 // MT5 bridge payload handling in live.js (served by tools/serve.py at ./live).
 import * as db from './db.js';
-import { pnl, rMultiple, outcome, summarize, equitySeries, bySetup, roi, tradeTime } from './calc.js';
-import { buildPositions, accountSummary } from './live.js';
+import { pnl, rMultiple, outcome, summarize, equitySeries, bySetup, roi, tradeTime,
+  equityPoints, manualBalanceEvents, niceTicks, indexStep } from './calc.js';
+import { buildPositions, accountSummary, liveEquitySeries } from './live.js';
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -709,12 +710,38 @@ function drawEquity() {
   ctx.scale(dpr, dpr);
   ctx.clearRect(0, 0, w, h);
 
+  if (live) {
+    const series = liveEquitySeries(
+      live.account, live.history || [], live.positions || []);
+    drawEquityCurve(ctx, w, h, series, live.account ? live.account.equity : null, true);
+    return;
+  }
+
+  if (account.startingBalance == null) {
+    drawPnlFallback(ctx, w, h);
+    return;
+  }
+
+  const deltas = manualBalanceEvents(trades)
+    .sort((a, b) => String(a.time).localeCompare(String(b.time)))
+    .map((e) => e.delta);
+  drawEquityCurve(ctx, w, h,
+    { label: 'Start', points: equityPoints(account.startingBalance, deltas) },
+    null, false);
+}
+
+// Pre-balance view: plain cumulative net P&L when no starting balance is set.
+const NO_BALANCE_HINT = 'Set a starting balance in Account to anchor the curve at your deposit';
+function drawPnlFallback(ctx, w, h) {
   const pts = equitySeries(currentRows());
   if (!pts.length) {
     ctx.fillStyle = '#8b949e';
-    ctx.font = '13px sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('No closed trades yet', w / 2, h / 2);
+    ctx.textBaseline = 'middle';
+    ctx.font = '13px sans-serif';
+    ctx.fillText('No closed trades yet', w / 2, h / 2 - 10);
+    ctx.font = '11px sans-serif';
+    ctx.fillText(NO_BALANCE_HINT, w / 2, h / 2 + 12);
     return;
   }
 
@@ -725,7 +752,6 @@ function drawEquity() {
   const x = (i) => padL + (pts.length === 1 ? (w - padL - padR) / 2 : i * (w - padL - padR) / (pts.length - 1));
   const y = (v) => padT + (max - v) * (h - padT - padB) / (max - min);
 
-  // zero line
   ctx.strokeStyle = '#30363d';
   ctx.lineWidth = 1;
   ctx.beginPath();
@@ -733,7 +759,6 @@ function drawEquity() {
   ctx.lineTo(w - padR, y(0));
   ctx.stroke();
 
-  // equity line
   const last = values[values.length - 1];
   ctx.strokeStyle = last >= 0 ? '#3fb950' : '#f85149';
   ctx.lineWidth = 2;
@@ -742,11 +767,161 @@ function drawEquity() {
   pts.forEach((p, i) => { i ? ctx.lineTo(x(i), y(p.value)) : ctx.moveTo(x(i), y(p.value)); });
   ctx.stroke();
 
-  // end dot + value label
   ctx.fillStyle = ctx.strokeStyle;
   ctx.beginPath();
   ctx.arc(x(pts.length - 1), y(last), 3.5, 0, Math.PI * 2);
   ctx.fill();
+
+  ctx.fillStyle = '#8b949e';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'bottom';
+  ctx.font = '10px sans-serif';
+  while (ctx.measureText(NO_BALANCE_HINT).width > w - 16
+      && Number(ctx.font.match(/\d+/)[0]) > 9) {
+    ctx.font = `${Number(ctx.font.match(/\d+/)[0]) - 1}px sans-serif`;
+  }
+  ctx.fillText(NO_BALANCE_HINT, w / 2, h - 4);
+}
+
+// Classic equity curve: x = trade index (0 = starting balance), y = balance.
+// Horizontal gridlines with value labels in the left gutter, trade-index
+// ticks along the bottom, a dashed baseline at the start value carrying the
+// only non-axis label ("Deposit £103.10" / "Start …"), a plain polyline,
+// and a dotted connector to live equity when it differs from the balance.
+function drawEquityCurve(ctx, w, h, series, equity, isLive) {
+  const padL = 46, padR = 10, padT = 10, padB = 16;
+  const pts = series.points;
+  const values = pts.map((p) => p.value);
+  if (equity != null && isFinite(equity)) values.push(equity);
+  let min = Math.min(...values), max = Math.max(...values);
+  if (min === max) {
+    const pad = Math.max(1, Math.abs(min) * 0.01);
+    min -= pad; max += pad;
+  } else {
+    const pad = (max - min) * 0.08;
+    min -= pad; max += pad;
+  }
+
+  const n = pts[pts.length - 1].i;
+  const x = (i) => padL + (n ? i * (w - padL - padR) / n : 0);
+  const y = (v) => padT + (max - v) * (h - padT - padB) / (max - min);
+  const line = pts[pts.length - 1].value >= pts[0].value ? '#3fb950' : '#f85149';
+
+  // horizontal gridlines + value labels in the gutter; fall back to a plain
+  // number format when the currency label would overflow the gutter.
+  const numFmt = new Intl.NumberFormat(undefined,
+    { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const ticks = niceTicks(min, max);
+  ctx.font = '10px sans-serif';
+  const widest = ticks.reduce(
+    (m, t) => Math.max(m, ctx.measureText(balFmt.format(t)).width), 0);
+  const tickFmt = widest <= padL - 8 ? balFmt : numFmt;
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'middle';
+  for (const t of ticks) {
+    const ty = y(t);
+    ctx.strokeStyle = '#21262d';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(padL, ty);
+    ctx.lineTo(w - padR, ty);
+    ctx.stroke();
+    ctx.fillStyle = '#8b949e';
+    ctx.fillText(tickFmt.format(t), padL - 5, ty);
+  }
+
+  // trade-index x ticks + faint vertical gridlines
+  const step = indexStep(n);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  for (let i = 0; i <= n; i += step) {
+    const tx = x(i);
+    ctx.strokeStyle = '#21262d';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(tx, padT);
+    ctx.lineTo(tx, h - padB);
+    ctx.stroke();
+    ctx.fillStyle = '#8b949e';
+    ctx.fillText(String(i), tx, h - padB + 3);
+  }
+
+  // start-value baseline + its label — the only non-axis text
+  const baseY = y(pts[0].value);
+  ctx.strokeStyle = '#8b949e';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath();
+  ctx.moveTo(padL, baseY);
+  ctx.lineTo(w - padR, baseY);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = '#8b949e';
+  ctx.font = '10px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'bottom';
+  ctx.fillText(`${series.label} ${balFmt.format(pts[0].value)}`, padL + 2, baseY - 3);
+
+  // the line: straight point-to-point segments. A deposit fold lifts the
+  // line to the post-deposit level at the previous index — drawn separately
+  // as a dotted vertical at x_i — so the following trade segment's slope is
+  // the trade's own delta, not trade + deposit.
+  ctx.strokeStyle = line;
+  ctx.lineWidth = 2;
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(x(pts[0].i), y(pts[0].value));
+  for (let j = 1; j < pts.length; j++) {
+    const p = pts[j];
+    if (p.kind === 'deposit') {
+      ctx.moveTo(x(pts[j - 1].i), y(p.value)); // pen lifts to post-deposit level
+    } else {
+      ctx.lineTo(x(p.i), y(p.value));
+    }
+  }
+  ctx.stroke();
+
+  for (let j = 1; j < pts.length; j++) {
+    const p = pts[j];
+    if (p.kind !== 'deposit') continue;
+    const px = x(p.i);
+    ctx.strokeStyle = '#8b949e';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([2, 3]);
+    ctx.beginPath();
+    ctx.moveTo(px, y(pts[j - 1].value));
+    ctx.lineTo(px, y(p.value));
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.arc(px, y(p.value), 3, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  // end dot
+  const ex = x(n), ey = y(pts[pts.length - 1].value);
+  ctx.fillStyle = line;
+  ctx.beginPath();
+  ctx.arc(ex, ey, 3.5, 0, Math.PI * 2);
+  ctx.fill();
+
+  // live equity connector, unlabelled, when it differs from the balance
+  if (isLive && equity != null && isFinite(equity)
+      && Math.abs(equity - pts[pts.length - 1].value) >= 0.005) {
+    const eqY = y(equity);
+    ctx.strokeStyle = '#8b949e';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([2, 3]);
+    ctx.beginPath();
+    ctx.moveTo(ex, ey);
+    ctx.lineTo(ex, eqY);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.arc(ex, eqY, 3, 0, Math.PI * 2);
+    ctx.stroke();
+  }
 }
 
 function renderSetupTable() {
@@ -767,9 +942,78 @@ function renderSetupTable() {
   }
 }
 
+/* ================= pull to refresh ================= */
+
+// Pull down from the top of the page (like a normal webpage): the #ptr
+// indicator follows the finger, and releasing past 70px refreshes — first
+// asking the service worker to check for updates, then reloading.
+const ptr = $('#ptr');
+let pullStartY = null;
+let pullDist = 0;
+
+const scrollTop = () => (document.scrollingElement || document.documentElement).scrollTop;
+const overlayOpen = () => !sheet.hidden || !$('#img-viewer').hidden;
+
+function setPtr(dist) {
+  if (!ptr) return;
+  ptr.style.transform = `translateX(-50%) translateY(${dist}px)`;
+  ptr.classList.toggle('ready', dist >= 70);
+}
+
+function pullReset() {
+  pullStartY = null;
+  pullDist = 0;
+  setPtr(0);
+}
+
+async function refreshFromPull() {
+  try {
+    const reg = await navigator.serviceWorker?.getRegistration();
+    await reg?.update();
+  } catch { /* offline or no SW — reload anyway */ }
+  location.reload();
+}
+
+window.addEventListener('touchstart', (e) => {
+  if (e.touches.length !== 1 || overlayOpen() || scrollTop() > 0) return;
+  pullStartY = e.touches[0].clientY;
+  pullDist = 0;
+}, { passive: true });
+
+window.addEventListener('touchmove', (e) => {
+  if (pullStartY == null) return;
+  const dy = e.touches[0].clientY - pullStartY;
+  if (dy <= 0 || scrollTop() > 0 || overlayOpen()) { pullReset(); return; }
+  e.preventDefault(); // pulling at the top — take over the rubber-band
+  pullDist = Math.min(dy, 90);
+  setPtr(pullDist);
+}, { passive: false });
+
+window.addEventListener('touchend', () => {
+  if (pullStartY == null) return;
+  const fired = pullDist >= 70;
+  pullReset();
+  if (fired) refreshFromPull();
+}, { passive: true });
+
+window.addEventListener('touchcancel', pullReset, { passive: true });
+
 /* ================= service worker ================= */
 
 // Registered silently; the app fully works without it (plain-LAN http included).
+// When a new worker takes control (a pull-to-refresh update, or any other
+// update), reload once onto the new assets — but never on first install.
+let swHadController = false;
+let swReloading = false;
+if ('serviceWorker' in navigator) {
+  swHadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!swHadController) { swHadController = true; return; }
+    if (swReloading) return;
+    swReloading = true;
+    location.reload();
+  });
+}
 if ('serviceWorker' in navigator && window.isSecureContext) {
   navigator.serviceWorker.register('./sw.js', { scope: './' }).catch(() => {});
 }
