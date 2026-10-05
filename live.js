@@ -24,6 +24,8 @@ function vwap(deals) {
 const sum = (deals, key) => deals.reduce((s, d) => s + (d[key] || 0), 0);
 
 function openRecord(p) {
+  const exportedPrice = p.price_current ?? null;
+  const exportedFloating = p.profit ?? null;
   return {
     positionId: p.position_id ?? p.ticket,
     symbol: p.symbol,
@@ -39,8 +41,10 @@ function openRecord(p) {
     tickets: [p.ticket],
     source: 'live',
     sl: p.sl || null,
-    currentPrice: p.price_current ?? null,
-    floating: p.profit ?? null,
+    currentPriceExported: exportedPrice,
+    floatingExported: exportedFloating,
+    currentPrice: exportedPrice,
+    floating: exportedFloating,
   };
 }
 
@@ -85,6 +89,8 @@ export function buildPositions(deals, openPositions) {
       tickets: ds.map((d) => d.ticket),
       source: 'live',
       sl: null,
+      currentPriceExported: null,
+      floatingExported: null,
       currentPrice: null,
       floating: null,
     };
@@ -93,8 +99,10 @@ export function buildPositions(deals, openPositions) {
       rec.volume = openPos.volume;
       rec.entry = openPos.price_open;
       rec.sl = openPos.sl || null;
-      rec.currentPrice = openPos.price_current ?? null;
-      rec.floating = openPos.profit ?? null;
+      rec.currentPriceExported = openPos.price_current ?? null;
+      rec.floatingExported = openPos.profit ?? null;
+      rec.currentPrice = rec.currentPriceExported;
+      rec.floating = rec.floatingExported;
     }
     out.push(rec);
   }
@@ -175,6 +183,56 @@ export function liveEquitySeries(account, deals, openPositions) {
     else points.push({ i: 1, value: acc, kind: 'cost', delta: openCost });
   }
   return { label, points, end: acc };
+}
+
+/* ---------- live tick math ---------- */
+
+// Contract sizes for live floating-P&L adjustment; null = no live adjustment.
+const CONTRACT_SIZE = { XAUUSD: 100, XAGUSD: 5000, US500: 1 };
+const FOREX_MAJORS = [
+  'EURUSD', 'GBPUSD', 'USDJPY', 'USDCHF', 'AUDUSD', 'NZDUSD', 'USDCAD',
+  'EURGBP', 'EURJPY', 'GBPJPY', 'AUDJPY',
+];
+
+export function contractSize(symbol) {
+  const s = String(symbol || '').toUpperCase().split('.')[0];
+  for (const [key, size] of Object.entries(CONTRACT_SIZE)) {
+    if (s.startsWith(key)) return size;
+  }
+  if (FOREX_MAJORS.some((m) => s.startsWith(m))) return 100000;
+  return null;
+}
+
+// The price an open position marks to: a SELL closes at the ask, a BUY at the bid.
+export function closePrice(direction, tick) {
+  if (!tick) return null;
+  return (direction === 'SHORT' || direction === 'SELL') ? tick.ask : tick.bid;
+}
+
+// Conversion-pair divisor for USD-quoted P&L into the account currency.
+// XXXUSD pairs (GBPUSD) divide directly; USDXXX pairs (USDJPY) invert.
+// 1 for USD accounts, null when the pair is unavailable.
+export function fxDivisor(currency, fx) {
+  if (!currency || currency.toUpperCase() === 'USD') return 1;
+  if (!fx || !fx.bid) return null;
+  const pair = String(fx.pair || '').toUpperCase();
+  if (pair.endsWith('USD')) return fx.bid;
+  if (pair.startsWith('USD')) return 1 / fx.bid;
+  return null;
+}
+
+// Live floating P&L via the delta method anchored on the broker's own
+// export: exported floating + move since the exported price, converted by fx.
+// Returns the exported value unchanged when the live inputs are missing.
+export function liveFloating(position, tick, fx, cs) {
+  const exported = position.floatingExported ?? position.floating ?? 0;
+  const ref = position.currentPriceExported ?? position.currentPrice;
+  const price = closePrice(position.direction, tick);
+  if (price == null || ref == null || cs == null || fx == null || !fx) {
+    return exported;
+  }
+  const dir = (position.direction === 'SHORT' || position.direction === 'SELL') ? -1 : 1;
+  return exported + (price - ref) * dir * (position.volume || 0) * cs / fx;
 }
 
 // Account-level aggregates from account.json + the 30-day deal window.

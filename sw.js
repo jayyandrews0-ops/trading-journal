@@ -1,5 +1,5 @@
 // Service worker: cache-first app shell, network-first for page navigations.
-const CACHE_VERSION = 'trading-journal-v6';
+const CACHE_VERSION = 'trading-journal-v7';
 
 const APP_SHELL = [
   './',
@@ -38,7 +38,7 @@ self.addEventListener('fetch', (event) => {
   if (req.method !== 'GET') return;
 
   // Live MT5 data: straight to the network, never cached.
-  if (new URL(req.url).pathname.endsWith('/live')) return;
+  if (new URL(req.url).pathname.includes('/live')) return;
 
   // Navigations: try the network first, fall back to the cached shell.
   if (req.mode === 'navigate') {

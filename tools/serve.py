@@ -13,6 +13,7 @@ written back.
 import argparse
 import json
 import os
+import re
 import socket
 import time
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -29,6 +30,10 @@ LIVE_FILES = {
     "positions": "positions.json",
 }
 
+TICK_NAME_RE = re.compile(r"^tick_[A-Z0-9._]{3,12}\.json$")
+STREAM_INTERVAL = 0.25   # tick export cadence
+PING_INTERVAL = 15.0
+
 
 class Handler(SimpleHTTPRequestHandler):
     data_dir = DEFAULT_DATA_DIR
@@ -43,8 +48,11 @@ class Handler(SimpleHTTPRequestHandler):
 
     # -- routing ----------------------------------------------------------
     def do_GET(self):
-        if self.path.split("?", 1)[0] == "/live":
+        path = self.path.split("?", 1)[0]
+        if path == "/live":
             self.handle_live()
+        elif path == "/live/stream":
+            self.handle_live_stream()
         else:
             super().do_GET()
 
@@ -58,7 +66,7 @@ class Handler(SimpleHTTPRequestHandler):
     do_OPTIONS = _method_not_allowed
 
     # -- /live ------------------------------------------------------------
-    def handle_live(self):
+    def live_payload(self):
         payload = {"ok": True, "served_at": time.time(), "errors": {}}
         for key, fname in LIVE_FILES.items():
             path = os.path.join(self.data_dir, fname)
@@ -76,12 +84,132 @@ class Handler(SimpleHTTPRequestHandler):
             except Exception as e:  # mid-write JSON, unreadable file, etc.
                 payload[key] = None
                 payload["errors"][key] = f"{fname}: {e}"
-        body = json.dumps(payload).encode("utf-8")
+        return payload
+
+    def handle_live(self):
+        body = json.dumps(self.live_payload()).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    # -- /live/stream -----------------------------------------------------
+    # Server-Sent Events: a "live" event on any account/positions/history
+    # file change (and once on connect), a "tick" event per changed tick file
+    # for the open-position symbols plus the account-currency conversion
+    # pair, and a ": ping" comment every 15 s. Read-only, like /live.
+    def _tick_file(self, symbol):
+        fname = f"tick_{symbol}.json"
+        if not TICK_NAME_RE.match(fname):
+            return None
+        path = os.path.join(self.data_dir, fname)
+        try:
+            with open(path, "rb") as f:
+                d = json.loads(f.read().decode("utf-8"))
+            d["_mtime"] = os.path.getmtime(path)
+            return d
+        except Exception:
+            return None
+
+    def _conversion_pair(self, currency):
+        ccy = (currency or "").upper()
+        if not ccy or ccy == "USD":
+            return None
+        for pair in (f"{ccy}USD", f"USD{ccy}"):
+            if self._tick_file(pair) is not None:
+                return pair
+        return None
+
+    def handle_live_stream(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+        self.close_connection = True
+
+        live_mtimes = {}
+        tick_mtimes = {}
+        last_ping = 0.0
+        while True:
+            try:
+                now = time.time()
+                # 1) the three live files
+                changed = False
+                for fname in LIVE_FILES.values():
+                    try:
+                        m = os.path.getmtime(os.path.join(self.data_dir, fname))
+                    except OSError:
+                        m = None
+                    if live_mtimes.get(fname) != m:
+                        live_mtimes[fname] = m
+                        changed = True
+                if changed:
+                    payload = self.live_payload()
+                    positions = payload.get("positions") or []
+                    account = payload.get("account") or {}
+                    self._send_event("live", payload)
+                else:
+                    positions = []
+                    try:
+                        with open(os.path.join(self.data_dir, "positions.json"), "rb") as f:
+                            positions = json.loads(f.read().decode("utf-8")) or []
+                    except Exception:
+                        pass
+                    account = {}
+                    try:
+                        with open(os.path.join(self.data_dir, "account.json"), "rb") as f:
+                            account = json.loads(f.read().decode("utf-8")) or {}
+                    except Exception:
+                        pass
+
+                # 2) tick files for open-position symbols + the fx pair
+                pair = self._conversion_pair(account.get("currency"))
+                symbols = {str(p.get("symbol", "")).upper().split(".")[0]
+                           for p in positions if p.get("symbol")}
+                watched = symbols | ({pair} if pair else set())
+                fx_tick = self._tick_file(pair) if pair else None
+                for sym in sorted(watched):
+                    path = os.path.join(self.data_dir, f"tick_{sym}.json")
+                    if not TICK_NAME_RE.match(f"tick_{sym}.json"):
+                        continue
+                    try:
+                        m = os.path.getmtime(path)
+                    except OSError:
+                        continue
+                    if tick_mtimes.get(sym) == m:
+                        continue
+                    tick_mtimes[sym] = m
+                    t = self._tick_file(sym)
+                    if not t:
+                        continue
+                    t.pop("_mtime", None)
+                    tick = {"symbol": t.get("symbol", sym), "bid": t.get("bid"),
+                            "ask": t.get("ask"), "time": t.get("time"),
+                            "time_msc": t.get("time_msc"),
+                            "fx": ({"pair": pair, "bid": fx_tick.get("bid"),
+                                    "ask": fx_tick.get("ask")}
+                                   if fx_tick else None)}
+                    self._send_event("tick", tick)
+
+                # 3) keep-alive
+                if now - last_ping >= PING_INTERVAL:
+                    self.wfile.write(b": ping\n\n")
+                    self.wfile.flush()
+                    last_ping = now
+
+                time.sleep(STREAM_INTERVAL)
+            except (BrokenPipeError, ConnectionResetError):
+                return
+            except Exception:
+                # never die on a mid-write JSON or transient stat error
+                time.sleep(STREAM_INTERVAL)
+
+    def _send_event(self, event, data):
+        self.wfile.write(
+            f"event: {event}\ndata: {json.dumps(data)}\n\n".encode("utf-8"))
+        self.wfile.flush()
 
 
 def lan_ip():
@@ -112,7 +240,7 @@ def main():
     print(f"Serving app  : http://127.0.0.1:{args.port}/", flush=True)
     ip = lan_ip()
     print(f"On iPhone    : http://{ip}:{args.port}/", flush=True)
-    print("Live endpoint: GET /live", flush=True)
+    print("Live endpoints: GET /live, GET /live/stream (SSE)", flush=True)
 
     server = ThreadingHTTPServer(("0.0.0.0", args.port), Handler)
     try:

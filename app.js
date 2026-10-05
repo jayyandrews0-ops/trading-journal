@@ -3,7 +3,8 @@
 import * as db from './db.js';
 import { pnl, rMultiple, outcome, summarize, equitySeries, bySetup, roi, tradeTime,
   equityPoints, manualBalanceEvents, niceTicks, indexStep } from './calc.js';
-import { buildPositions, accountSummary, liveEquitySeries } from './live.js';
+import { buildPositions, accountSummary, liveEquitySeries,
+  closePrice, liveFloating, contractSize, fxDivisor } from './live.js';
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -137,20 +138,36 @@ function currentRows() {
 
 let wasLive = false; // went live once this session — losing it means "connection lost"
 
+// Latest live-adjusted values, keyed by position + broker anchor, so a 5 s
+// export refresh keeps showing tick-updated numbers when the anchor agrees.
+const liveFloatCache = new Map();
+let lastStreamAt = 0;     // ms epoch of the last live/tick stream event
+let tickFx = null;        // latest conversion-pair quote {pair, bid, ask}
+
+function applyLiveData(data) {
+  live = data && data.ok && data.account ? data : null;
+  if (live) wasLive = true;
+  positions = live ? buildPositions(live.history || [], live.positions || []) : [];
+  for (const p of positions) {
+    const cached = liveFloatCache.get(p.positionId);
+    const anchor = `${p.floatingExported}|${p.currentPriceExported}`;
+    if (cached && cached.anchor === anchor) {
+      p.floating = cached.floating;
+      p.currentPrice = cached.currentPrice;
+    }
+  }
+  refreshFormatters();
+  renderAll();
+}
+
 async function pollLive() {
   try {
     const res = await fetch('./live', { cache: 'no-store' });
     if (!res.ok) throw new Error('http ' + res.status);
-    const data = await res.json();
-    // Only "connected" when a real account record came back.
-    live = data && data.ok && data.account ? data : null;
+    applyLiveData(await res.json());
   } catch {
-    live = null;
+    applyLiveData(null);
   }
-  if (live) wasLive = true;
-  positions = live ? buildPositions(live.history || [], live.positions || []) : [];
-  refreshFormatters();
-  renderAll();
 }
 
 function renderAll() {
@@ -167,10 +184,144 @@ function renderAll() {
     : 'Computed from closed trades only.';
 }
 
+/* ---------- live stream ---------- */
+// SSE keeps the UI ticking between the 5 s bulk exports. On stream failure
+// it falls back to plain polling and retries the stream every 30 s.
+let eventSource = null;
+window.__liveStreamOn = false; // test hook: true while the SSE stream is open
+let pollTimer = null;
+let sseRetryTimer = null;
+const pendingTicks = new Map();
+let tickRaf = 0;
+
+function startLive() {
+  if (eventSource || document.hidden) return;
+  eventSource = new EventSource('./live/stream');
+  eventSource.onopen = () => { window.__liveStreamOn = true; stopPollFallback(); };
+  eventSource.addEventListener('live', (e) => {
+    lastStreamAt = Date.now();
+    try { applyLiveData(JSON.parse(e.data)); } catch { /* bad payload */ }
+  });
+  eventSource.addEventListener('tick', (e) => {
+    lastStreamAt = Date.now();
+    try { onTick(JSON.parse(e.data)); } catch { /* bad payload */ }
+  });
+  eventSource.onerror = () => {
+    stopStream();
+    startPollFallback();
+    scheduleSseRetry();
+  };
+}
+
+function stopStream() {
+  window.__liveStreamOn = false;
+  if (eventSource) { eventSource.close(); eventSource = null; }
+}
+
+function startPollFallback() {
+  if (!pollTimer) {
+    pollTimer = setInterval(() => { if (!document.hidden) pollLive(); }, 5000);
+    pollLive();
+  }
+}
+
+function stopPollFallback() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+}
+
+function scheduleSseRetry() {
+  if (sseRetryTimer) return;
+  sseRetryTimer = setTimeout(() => { sseRetryTimer = null; startLive(); }, 30000);
+}
+
+function onTick(t) {
+  if (t.fx) tickFx = t.fx;
+  pendingTicks.set(t.symbol, t);
+  if (!tickRaf) tickRaf = requestAnimationFrame(applyTicks);
+}
+
+// Apply queued ticks in-place: open-position floating/currentPrice, the
+// History rows' P&L cells, Account Equity/Floating/ROI cards, the ROI hero,
+// and the equity canvas tail — never a full re-render.
+function applyTicks() {
+  tickRaf = 0;
+  if (!live) { pendingTicks.clear(); return; }
+  const fx = fxDivisor(activeCurrency(), tickFx);
+  let touched = false;
+  for (const [sym, t] of pendingTicks) {
+    for (const p of positions) {
+      if (p.status !== 'OPEN' || p.symbol !== sym) continue;
+      const cs = contractSize(sym);
+      const px = closePrice(p.direction, t);
+      if (px != null) p.currentPrice = px;
+      if (cs != null) p.floating = liveFloating(p, t, fx, cs);
+      liveFloatCache.set(p.positionId, {
+        anchor: `${p.floatingExported}|${p.currentPriceExported}`,
+        floating: p.floating, currentPrice: p.currentPrice,
+      });
+      touched = true;
+    }
+  }
+  pendingTicks.clear();
+  if (!touched) return;
+  updateLiveDom();
+}
+
+// balance + live floating = live equity
+function liveEquity() {
+  const floating = positions
+    .filter((p) => p.status === 'OPEN')
+    .reduce((s, p) => s + (p.floating || 0), 0);
+  const balance = (live && live.account && live.account.balance) || 0;
+  return { floating, equity: balance + floating };
+}
+
+function updateLiveDom() {
+  // 1) open rows' P&L cells in the History list
+  for (const p of positions) {
+    if (p.status !== 'OPEN') continue;
+    const row = document.querySelector(`.trade-row[data-position-id="${p.positionId}"]`);
+    const pnlEl = row && row.querySelector('.trade-pnl');
+    if (pnlEl) {
+      pnlEl.textContent = fmtPnl(p.floating);
+      pnlEl.className = 'trade-pnl ' + pnlClass(p.floating);
+    }
+  }
+  // 2) Account cards: Equity / Floating P&L / ROI
+  const { floating, equity } = liveEquity();
+  const sum = accountSummary(live.account, live.history || []);
+  const roi = sum.deposits > 0 ? (equity - sum.deposits) / sum.deposits : null;
+  const setStat = (name, text) => {
+    const el = document.querySelector(
+      `#account-live-stats .stat[data-stat="${name}"] .stat-value`);
+    if (el) el.textContent = text;
+  };
+  setStat('Equity', balFmt.format(equity));
+  setStat('Floating P&L', fmtPnl(floating));
+  setStat('ROI', roi == null ? '—' : fmtPct(roi));
+  // 3) ROI hero
+  const v = $('#roi-value'), sub = $('#roi-sub');
+  if (roi != null) {
+    v.textContent = fmtPct(roi);
+    v.className = 'roi-value ' + (roi > 0 ? 'pos' : roi < 0 ? 'neg' : 'flat');
+    sub.textContent = `Net ${fmtPnl(equity - sum.deposits)} · Equity ${balFmt.format(equity)}`;
+  }
+  // 4) equity canvas tail, only while the Stats view is up
+  if ($('#view-stats').classList.contains('active')) drawEquity();
+}
+
 function startPolling() {
-  pollLive();
-  setInterval(() => { if (!document.hidden) pollLive(); }, 5000);
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) pollLive(); });
+  startLive();
+  setInterval(() => { if (live) updateLivePill(); }, 1000);
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      stopStream();
+      stopPollFallback();
+    } else {
+      startLive();
+      if (!eventSource) pollLive();
+    }
+  });
 }
 
 /* ================= tabs ================= */
@@ -235,8 +386,12 @@ function renderAccountLive() {
 }
 
 function updateLivePill() {
-  const age = (Date.now() / 1000 - (live.served_at || 0))
-    + ((live.account && live.account.file_age_seconds) || 0);
+  // While the stream is up, age is time since the last live/tick event.
+  const streaming = !!eventSource;
+  const age = streaming && lastStreamAt
+    ? (Date.now() - lastStreamAt) / 1000
+    : (Date.now() / 1000 - (live.served_at || 0))
+      + ((live.account && live.account.file_age_seconds) || 0);
   const pill = $('#live-pill');
   $('#live-age').textContent = age > 300
     ? 'stale'
@@ -330,6 +485,7 @@ function renderTrades() {
     row.className = 'trade-row';
     row.type = 'button';
     const isLive = t.source === 'live';
+    if (isLive) row.dataset.positionId = t.positionId;
 
     const badgeWrap = document.createElement('span');
     const badge = document.createElement('span');
@@ -658,6 +814,7 @@ $('#btn-delete').addEventListener('click', async () => {
 function statCard(label, value, sub) {
   const div = document.createElement('div');
   div.className = 'stat';
+  div.dataset.stat = label;
   const l = document.createElement('div');
   l.className = 'stat-label';
   l.textContent = label;
@@ -713,7 +870,7 @@ function drawEquity() {
   if (live) {
     const series = liveEquitySeries(
       live.account, live.history || [], live.positions || []);
-    drawEquityCurve(ctx, w, h, series, live.account ? live.account.equity : null, true);
+    drawEquityCurve(ctx, w, h, series, liveEquity().equity, true);
     return;
   }
 
