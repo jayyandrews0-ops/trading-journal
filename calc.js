@@ -272,130 +272,82 @@ export function weekKey(day) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
-// Loss-limit lines aligned 1:1 with the equity points.
+// Loss limits, for the drawdown panel.
 //   daily:  pct% below the running DAY peak (trails, resets each broker day)
 //   weekly: pct% below the WEEK's starting balance (fixed, resets Monday)
-// On a breach the line freezes at its last level until the next reset, and
-// the point is recorded in `breaches`. Deposits shift the levels with the
-// money (a step) and are never breach-checked.
-export function riskLines(points, { dailyPct, weeklyPct } = {}) {
-  const result = { daily: [], weekly: [], breaches: [] };
-  if (!points.length) return result;
-  for (const [kind, pct] of [['daily', dailyPct], ['weekly', weeklyPct]]) {
-    result[kind] = walkRisk(points, pct, kind, result.breaches).arr;
-  }
-  result.breaches.sort((a, b) => a.i - b.i);
-  return result;
-}
-
-// Walks the points once and returns the per-point line levels plus the end
-// state of the last period — riskStatus() continues from it for "now".
-// state.breach is the CURRENT period's breach { i, value, time } or null.
-function walkRisk(points, pct, kind, breaches) {
-  const arr = new Array(points.length).fill(null);
-  const state = {
-    periodStart: 0, allowance: 0, peak: 0,
-    frozen: false, frozenValue: 0, period: null, breach: null,
-  };
-  if (!(typeof pct === 'number' && isFinite(pct) && pct > 0)) {
-    return { arr, state };
-  }
+// Walks the closed-trade points once, tracking the period anchors for one
+// rule. Resets derive from the previous point's value; deposits shift the
+// anchors with the money. The daily peak trails every close — there is no
+// freeze: these are the user's own limits, a close under the level changes
+// nothing about how the level is computed.
+function walkRisk(points, pct, kind) {
+  const state = { periodStart: 0, allowance: 0, peak: 0, period: null };
+  if (!(typeof pct === 'number' && isFinite(pct) && pct > 0)) return state;
 
   const keyOf = (p) => {
     const day = String(p.time || '').slice(0, 10);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return null;
     return kind === 'daily' ? day : weekKey(day);
   };
-  const line = () => (kind === 'daily' ? state.peak : state.periodStart)
-    - state.allowance;
 
   const start = points[0].value;
   state.periodStart = start;
   state.allowance = pct / 100 * start;
   state.peak = start;
-  arr[0] = { value: start - state.allowance, reset: true };
 
   for (let j = 1; j < points.length; j++) {
     const p = points[j];
     const key = keyOf(p);
-    let reset = false;
     if (key !== null && key !== state.period) {
       // The first dated point only adopts its period; a reset happens when
       // an already-established period key changes.
-      reset = state.period !== null;
+      const reset = state.period !== null;
       state.period = key;
       if (reset) {
         state.periodStart = points[j - 1].value;
         state.allowance = pct / 100 * state.periodStart;
         state.peak = state.periodStart;
-        state.frozen = false;
-        state.breach = null;
       }
     }
     if (p.kind === 'deposit') {
       state.periodStart += p.delta;
       state.peak += p.delta;
-      if (state.frozen) state.frozenValue += p.delta;
-      // a step, never a breach check — frozen levels move with the money
-      arr[j] = { value: state.frozen ? state.frozenValue : line(), reset: true };
-      continue;
-    }
-    if (state.frozen) {
-      // One breach per period: no re-marking, no trailing, no unfreeze —
-      // only the next period reset clears this.
-      arr[j] = { value: state.frozenValue, reset };
-      continue;
-    }
-    const lineBefore = line();
-    if (p.value < lineBefore) {
-      const breach = { i: p.i, kind, value: p.value, time: p.time ?? null };
-      breaches.push(breach);
-      state.breach = { i: breach.i, value: breach.value, time: breach.time };
-      state.frozen = true;
-      state.frozenValue = lineBefore;
-      arr[j] = { value: state.frozenValue, reset };
-    } else {
-      if (kind === 'daily') state.peak = Math.max(state.peak, p.value);
-      arr[j] = { value: line(), reset };
+    } else if (kind === 'daily') {
+      state.peak = Math.max(state.peak, p.value);
     }
   }
-  return { arr, state };
+  return state;
 }
 
 // Where the rules stand NOW: the closed-history state continued into the
 // current period, measured against live equity. When today has rolled past
 // the last closed trade's period the rule starts fresh from the balance —
-// the reset happened even though nothing was written.
+// the reset happened even though nothing was written. `left` may go
+// negative: it is room remaining, not a breach flag.
 export function riskStatus(points, { dailyPct, weeklyPct } = {},
                            { today, equity } = {}) {
   const balance = points.length ? points[points.length - 1].value : 0;
   const eq = Number.isFinite(equity) ? equity : balance;
 
-  const line0 = (state, kind) =>
-    (kind === 'daily' ? state.peak : state.periodStart) - state.allowance;
-
   const status = (kind, pct) => {
     if (!(typeof pct === 'number' && isFinite(pct) && pct > 0)) return null;
-    const { state } = walkRisk(points, pct, kind, []);
+    const state = walkRisk(points, pct, kind);
     const key = today ? (kind === 'daily' ? today : weekKey(today)) : '';
-    let periodStart, allowance, level, frozen, breach;
+    let periodStart, allowance, level;
     if (key && (state.period === null || state.period !== key)) {
       periodStart = balance;
       allowance = pct / 100 * periodStart;
       level = periodStart - allowance;
-      frozen = false;
-      breach = null;
     } else {
       periodStart = state.periodStart;
       allowance = state.allowance;
-      level = state.frozen ? state.frozenValue : line0(state, kind);
-      frozen = state.frozen;
-      breach = state.breach;
+      level = (kind === 'daily' ? state.peak : state.periodStart) - allowance;
     }
     const left = eq - level;
-    const used = frozen ? 1
-      : Math.min(1, Math.max(0, (allowance - left) / allowance));
-    return { pct, periodStart, allowance, level, left, used, frozen, breach };
+    // Snap float dust to 0 so sitting exactly on the peak reads as no usage.
+    const raw = (allowance - left) / allowance;
+    const used = raw < 1e-6 ? 0 : Math.min(1, raw);
+    return { pct, periodStart, allowance, level, left, used };
   };
 
   return {

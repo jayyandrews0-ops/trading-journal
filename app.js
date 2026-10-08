@@ -1141,16 +1141,12 @@ function renderDrawdown() {
     el.hidden = false;
     el.querySelector('.dd-pct').textContent = `${st2.pct}%`;
     const leftEl = el.querySelector('.dd-left');
-    if (st2.frozen) {
-      leftEl.className = 'dd-left breached';
-      leftEl.textContent = 'Breached'
-        + (st2.breach && st2.breach.time ? ` · ${fmtDate(st2.breach.time)}` : '');
-    } else if (st2.left <= 0) {
-      leftEl.className = 'dd-left breached';
-      leftEl.textContent = 'Breached · live';
-    } else {
+    if (st2.left >= 0) {
       leftEl.className = 'dd-left';
       leftEl.textContent = `${balFmt.format(st2.left)} left`;
+    } else {
+      leftEl.className = 'dd-left over';
+      leftEl.textContent = `${balFmt.format(-st2.left)} over`;
     }
     const bar = el.querySelector('.dd-bar');
     bar.innerHTML = '';

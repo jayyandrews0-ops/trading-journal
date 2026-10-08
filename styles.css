@@ -358,7 +358,7 @@ html, body {
 }
 .dd-title { color: var(--text-dim); font-size: 13px; }
 .dd-left { font-size: 24px; font-weight: 700; margin: 4px 0 8px; font-variant-numeric: tabular-nums; }
-.dd-left.breached { color: var(--red); }
+.dd-left.over { color: var(--red); }
 .dd-bar { display: flex; gap: 2px; }
 .dd-bar i { flex: 1; height: 22px; border-radius: 2px; background: #30363d; }
 .dd-bar i.used { background: var(--red); }
