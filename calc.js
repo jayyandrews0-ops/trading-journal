@@ -415,3 +415,78 @@ export function dayState(group, key, { today, earliest } = {}) {
   if (group.net < 0) return 'loss';
   return 'flat';
 }
+
+function parseDayKey(key) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(key));
+  return m ? new Date(+m[1], +m[2] - 1, +m[3]) : null;
+}
+
+function formatDayKey(d) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+export function shiftDay(key, days) {
+  const d = parseDayKey(key);
+  if (!d) return String(key);
+  d.setDate(d.getDate() + days);
+  return formatDayKey(d);
+}
+
+// Same day-of-month, clamped to the target month's length.
+export function shiftMonth(key, months) {
+  const d = parseDayKey(key);
+  if (!d) return String(key);
+  const target = new Date(d.getFullYear(), d.getMonth() + months, 1);
+  const last = new Date(
+    target.getFullYear(), target.getMonth() + 1, 0).getDate();
+  target.setDate(Math.min(d.getDate(), last));
+  return formatDayKey(target);
+}
+
+// The 7 cells of a week starting on its Monday key: { key, day, dow 0..6 }.
+export function weekDays(mondayKey) {
+  const days = [];
+  for (let dow = 0; dow < 7; dow++) {
+    const key = shiftDay(mondayKey, dow);
+    days.push({ key, day: +key.slice(8, 10), dow });
+  }
+  return days;
+}
+
+// "5 – 11 Oct 2026"; month/year appear once unless the week spans them.
+// Month name via Intl ("Sept" normalised to "Sep").
+export function weekTitle(mondayKey, { locale } = {}) {
+  const start = parseDayKey(mondayKey);
+  if (!start) return '';
+  const end = new Date(
+    start.getFullYear(), start.getMonth(), start.getDate() + 6);
+  const mon = (d) =>
+    new Intl.DateTimeFormat(locale, { month: 'short' })
+      .format(d).replace(/^Sept$/, 'Sep');
+  const sameMonth = start.getMonth() === end.getMonth();
+  const sameYear = start.getFullYear() === end.getFullYear();
+  const a = `${start.getDate()}`
+    + (sameMonth ? '' : ` ${mon(start)}`)
+    + (sameYear ? '' : ` ${start.getFullYear()}`);
+  const b = `${end.getDate()} ${mon(end)} ${end.getFullYear()}`;
+  return `${a} – ${b}`;
+}
+
+// Result tallies for the `N/Rr/Gg` summary: total counts every item with a
+// result; net 0 counts in total only.
+export function countResults(items, netOf) {
+  let total = 0, red = 0, green = 0;
+  for (const it of items) {
+    const n = netOf(it);
+    if (n == null) continue;
+    total += 1;
+    if (n < 0) red += 1;
+    else if (n > 0) green += 1;
+  }
+  return { total, red, green };
+}
+
+export function summaryText({ total, red, green }) {
+  return `${total}/${red}r/${green}g`;
+}

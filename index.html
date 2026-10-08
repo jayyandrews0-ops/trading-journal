@@ -109,10 +109,15 @@
   <section id="view-calendar" class="view">
     <header class="view-header"><h1>Calendar</h1></header>
     <div class="card">
+      <div class="seg cal-seg" id="cal-view-seg">
+        <button type="button" class="seg-btn" data-view="day">Day</button>
+        <button type="button" class="seg-btn" data-view="week">Week</button>
+        <button type="button" class="seg-btn active" data-view="month">Month</button>
+      </div>
       <div class="cal-head">
-        <button type="button" id="cal-prev" class="cal-nav" aria-label="Previous month">‹</button>
+        <button type="button" id="cal-prev" class="cal-nav" aria-label="Previous">‹</button>
         <h2 id="cal-title"></h2>
-        <button type="button" id="cal-next" class="cal-nav" aria-label="Next month">›</button>
+        <button type="button" id="cal-next" class="cal-nav" aria-label="Next">›</button>
       </div>
       <div class="cal-dow"><span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span><span>S</span></div>
       <div id="cal-grid" class="cal-grid"></div>

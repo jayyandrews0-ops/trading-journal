@@ -3,7 +3,9 @@
 import * as db from './db.js';
 import { pnl, rMultiple, outcome, summarize, equitySeries, bySetup, byGrade, roi, tradeTime,
   equityPoints, manualBalanceEvents, niceTicks, indexStep, setupLabel,
-  SETUP_FIELDS, groupByDay, dayLabel, riskStatus, monthGrid, dayState } from './calc.js';
+  SETUP_FIELDS, groupByDay, dayLabel, riskStatus, monthGrid, dayState,
+  isClosed, tradeNet, weekKey, shiftDay, shiftMonth, weekDays, weekTitle,
+  countResults, summaryText } from './calc.js';
 import { buildPositions, accountSummary, liveEquitySeries,
   closePrice, liveFloating, contractSize, fxDivisor,
   parseBrokerTime } from './live.js';
@@ -1119,7 +1121,8 @@ function renderStats() {
 
 /* ================= calendar ================= */
 
-let calMonth = null; // { y, m } — initialised to "today" on first render
+let calAnchor = null;        // 'YYYY-MM-DD' — initialised to today on first render
+let calView = 'month';       // 'day' | 'week' | 'month'
 
 function calendarToday() {
   return live
@@ -1138,70 +1141,145 @@ function calendarEarliest() {
   return earliest;
 }
 
+// One coloured box in month/week view: day number, net and (week only) a
+// "wW lL" count line for traded days; disabled when there's nothing to open.
+function calDayCell(key, dayNum, g, state, { out, today, dow, wl } = {}) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.dataset.day = key;
+  btn.className = `cal-day ${state}`
+    + (out ? ' out' : '') + (today ? ' today' : '');
+  if (dow) {
+    const d = document.createElement('span');
+    d.className = 'cal-dow-l';
+    d.textContent = dow;
+    btn.append(d);
+  }
+  const num = document.createElement('span');
+  num.className = 'cal-num';
+  num.textContent = dayNum;
+  btn.append(num);
+  if (state === 'win' || state === 'loss' || state === 'flat') {
+    const netEl = document.createElement('span');
+    netEl.className = 'cal-net';
+    netEl.textContent = fmtCost(g.net);
+    btn.append(netEl);
+    if (wl) {
+      const wlEl = document.createElement('span');
+      wlEl.className = 'cal-wl';
+      wlEl.textContent = `${g.wins}W ${g.losses}L`;
+      btn.append(wlEl);
+    }
+  } else {
+    btn.disabled = true;
+  }
+  return btn;
+}
+
+// Day view: one box per row, coloured by its result (open rows grey "open").
+function calTradeCell(t) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  const net = isClosed(t) ? (tradeNet(t) ?? 0) : null;
+  btn.className = `cal-trade ${
+    net === null ? 'open' : net > 0 ? 'win' : net < 0 ? 'loss' : 'flat'}`;
+  const time = document.createElement('span');
+  time.className = 'cal-num';
+  time.textContent = String(tradeTime(t) || '').slice(11, 16);
+  btn.append(time);
+  const netEl = document.createElement('span');
+  netEl.className = 'cal-net';
+  netEl.textContent = net === null ? 'open' : fmtCost(net);
+  btn.append(netEl);
+  btn.addEventListener('click', () => openForm(t));
+  return btn;
+}
+
 function renderCalendar() {
   const today = calendarToday();
-  if (!calMonth) {
-    calMonth = { y: +today.slice(0, 4), m: +today.slice(5, 7) };
-  }
+  if (!calAnchor) calAnchor = today;
   const earliest = calendarEarliest();
   const groups = new Map(
     groupByDay(currentRows()).map((g) => [g.key, g]));
-
-  $('#cal-title').textContent = new Intl.DateTimeFormat(undefined, {
-    month: 'long', year: 'numeric',
-  }).format(new Date(calMonth.y, calMonth.m - 1, 1));
-
   const grid = $('#cal-grid');
+  grid.className = `cal-grid cal-grid--${calView}`;
   grid.innerHTML = '';
-  let traded = 0, green = 0, red = 0, net = 0;
-  for (const cell of monthGrid(calMonth.y, calMonth.m)) {
-    const g = groups.get(cell.key);
-    const state = dayState(g, cell.key, { today, earliest });
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.dataset.day = cell.key;
-    btn.className = `cal-day ${state}`
-      + (cell.inMonth ? '' : ' out')
-      + (cell.key === today ? ' today' : '');
-    const num = document.createElement('span');
-    num.className = 'cal-num';
-    num.textContent = cell.day;
-    btn.append(num);
-    if (state === 'win' || state === 'loss' || state === 'flat') {
-      const netEl = document.createElement('span');
-      netEl.className = 'cal-net';
-      netEl.textContent = state === 'flat' ? balFmt.format(0) : fmtPnl(g.net);
-      btn.append(netEl);
-    } else {
-      btn.disabled = true; // nothing to open
+  document.querySelector('.cal-dow').hidden = calView !== 'month';
+  const opts = { today, earliest };
+
+  if (calView === 'month') {
+    const y = +calAnchor.slice(0, 4);
+    const m = +calAnchor.slice(5, 7);
+    $('#cal-title').textContent = new Intl.DateTimeFormat(undefined, {
+      month: 'long', year: 'numeric',
+    }).format(new Date(y, m - 1, 1));
+    const tradedDays = [];
+    for (const cell of monthGrid(y, m)) {
+      const g = groups.get(cell.key);
+      grid.append(calDayCell(cell.key, cell.day, g,
+        dayState(g, cell.key, opts),
+        { out: !cell.inMonth, today: cell.key === today }));
+      if (cell.inMonth && g && g.closed > 0) tradedDays.push(g);
     }
-    grid.append(btn);
-    if (cell.inMonth && g && g.closed > 0) {
-      traded += 1;
-      if (g.net > 0) green += 1;
-      else if (g.net < 0) red += 1;
-      net += g.net;
+    $('#cal-summary').textContent =
+      summaryText(countResults(tradedDays, (g) => g.net));
+  } else if (calView === 'week') {
+    const monday = weekKey(calAnchor);
+    $('#cal-title').textContent = weekTitle(monday);
+    const tradedDays = [];
+    for (const c of weekDays(monday)) {
+      const g = groups.get(c.key);
+      grid.append(calDayCell(c.key, c.day, g, dayState(g, c.key, opts),
+        { today: c.key === today, dow: 'MTWTFSS'[c.dow], wl: true }));
+      if (g && g.closed > 0) tradedDays.push(g);
+    }
+    $('#cal-summary').textContent =
+      summaryText(countResults(tradedDays, (g) => g.net));
+  } else {
+    const d = new Date(+calAnchor.slice(0, 4), +calAnchor.slice(5, 7) - 1,
+      +calAnchor.slice(8, 10));
+    $('#cal-title').textContent = new Intl.DateTimeFormat(undefined, {
+      weekday: 'short', day: 'numeric', month: 'short', year: 'numeric',
+    }).format(d).replace(/,/g, '');
+    const g = groups.get(calAnchor);
+    if (g && g.trades.length) {
+      for (const t of g.trades) grid.append(calTradeCell(t));
+      $('#cal-summary').textContent =
+        summaryText(countResults(g.trades.filter(isClosed), tradeNet));
+    } else {
+      const state = dayState(g, calAnchor, opts);
+      const empty = document.createElement('div');
+      empty.className = 'cal-empty';
+      empty.textContent = state === 'future' ? 'Nothing yet'
+        : state === 'unknown' ? 'Before the export window' : 'No trades';
+      grid.append(empty);
+      $('#cal-summary').textContent =
+        summaryText({ total: 0, red: 0, green: 0 });
     }
   }
-  $('#cal-summary').textContent = traded
-    ? `${traded} days traded · ${green} green · ${red} red · Net ${fmtPnl(net)}`
-    : 'No closed trades this month';
 
   renderDrawdown(); // the drawdown card lives on this page
 }
 
-function stepCalMonth(delta) {
-  if (!calMonth) {
-    const today = calendarToday();
-    calMonth = { y: +today.slice(0, 4), m: +today.slice(5, 7) };
-  }
-  const d = new Date(calMonth.y, calMonth.m - 1 + delta, 1);
-  calMonth = { y: d.getFullYear(), m: d.getMonth() + 1 };
+function stepCal(delta) {
+  if (!calAnchor) calAnchor = calendarToday();
+  calAnchor = calView === 'month' ? shiftMonth(calAnchor, delta)
+    : calView === 'week' ? shiftDay(calAnchor, delta * 7)
+    : shiftDay(calAnchor, delta);
   renderCalendar();
 }
 
-$('#cal-prev').addEventListener('click', () => stepCalMonth(-1));
-$('#cal-next').addEventListener('click', () => stepCalMonth(1));
+$('#cal-prev').addEventListener('click', () => stepCal(-1));
+$('#cal-next').addEventListener('click', () => stepCal(1));
+
+$('#cal-view-seg').addEventListener('click', (e) => {
+  const btn = e.target.closest('.seg-btn');
+  if (!btn) return;
+  calView = btn.dataset.view;
+  document.querySelectorAll('#cal-view-seg .seg-btn')
+    .forEach((b) => b.classList.toggle('active', b === btn));
+  renderCalendar();
+});
 
 // Tapping a traded day jumps to it, expanded, in History.
 $('#cal-grid').addEventListener('click', (e) => {

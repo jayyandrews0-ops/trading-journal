@@ -5,7 +5,8 @@ import assert from 'node:assert/strict';
 import { equityPoints, manualBalanceEvents, niceTicks, summarize,
   setupLabel, bySetup, byGrade, SETUP_FIELDS,
   dayKey, groupByDay, dayLabel, weekKey, riskStatus,
-  monthGrid, dayState } from '../calc.js';
+  monthGrid, dayState, shiftDay, shiftMonth, weekDays, weekTitle,
+  countResults, summaryText } from '../calc.js';
 import { liveEquitySeries } from '../live.js';
 
 test('equityPoints: point 0 is the start, one point per trade', () => {
@@ -330,4 +331,35 @@ test('dayState: future > unknown > win/loss/flat > none', () => {
     dayState({ closed: 1, net: 9 }, '2030-01-01',
       { today: '2026-10-08', earliest: '2030-06-01' }),
     'future');
+});
+
+test('shiftDay / shiftMonth move day keys', () => {
+  assert.equal(shiftDay('2026-10-31', 1), '2026-11-01');
+  assert.equal(shiftDay('2026-10-05', -7), '2026-09-28');
+  assert.equal(shiftMonth('2026-10-31', 1), '2026-11-30'); // clamps to month end
+  assert.equal(shiftMonth('2026-01-15', -1), '2025-12-15');
+});
+
+test('weekDays: 7 cells from the Monday', () => {
+  const days = weekDays('2026-10-05');
+  assert.equal(days.length, 7);
+  assert.equal(days[0].key, '2026-10-05');
+  assert.equal(days[6].key, '2026-10-11');
+  assert.equal(days[0].dow, 0);
+  assert.equal(days[6].dow, 6);
+});
+
+test('weekTitle: month/year shown once unless the week spans them', () => {
+  const en = { locale: 'en-GB' };
+  assert.equal(weekTitle('2026-10-05', en), '5 – 11 Oct 2026');
+  assert.equal(weekTitle('2026-09-28', en), '28 Sep – 4 Oct 2026');
+  assert.equal(weekTitle('2025-12-29', en), '29 Dec 2025 – 4 Jan 2026');
+});
+
+test('countResults / summaryText', () => {
+  assert.deepEqual(
+    countResults([5, -3, 0].map((n) => ({ n })), (x) => x.n),
+    { total: 3, red: 1, green: 1 });
+  assert.equal(summaryText({ total: 4, red: 2, green: 2 }), '4/2r/2g');
+  assert.equal(summaryText({ total: 0, red: 0, green: 0 }), '0/0r/0g');
 });
