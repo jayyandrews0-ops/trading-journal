@@ -2,7 +2,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { equityPoints, manualBalanceEvents, niceTicks } from '../calc.js';
+import { equityPoints, manualBalanceEvents, niceTicks,
+  setupLabel, bySetup, byGrade, SETUP_FIELDS } from '../calc.js';
 import { liveEquitySeries } from '../live.js';
 
 test('equityPoints: point 0 is the start, one point per trade', () => {
@@ -121,4 +122,41 @@ test('manualBalanceEvents ignores open trades', () => {
   assert.equal(events.length, 2);
   assert.ok(Math.abs(events[0].delta - 4) < 1e-9);
   assert.ok(Math.abs(events[1].delta - 4) < 1e-9);
+});
+
+test('setupLabel: TF+zone derives, zone-only works, legacy fallback, empty', () => {
+  assert.equal(setupLabel({ zoneTf: 'M15', zone: 'Demand' }), 'M15 Demand');
+  assert.equal(setupLabel({ zone: 'Demand' }), 'Demand');
+  assert.equal(setupLabel({ zoneTf: 'M15' }), 'M15');
+  assert.equal(setupLabel({ setup: 'breakout' }), 'breakout');
+  assert.equal(setupLabel({}), '');
+});
+
+test('bySetup: default key uses setupLabel with (none) fallback', () => {
+  const rows = bySetup([
+    { zoneTf: 'M15', zone: 'Demand', exit: 2, entry: 1, size: 1 },
+    { zoneTf: 'M15', zone: 'Demand', exit: 0.5, entry: 1, size: 1 },
+    { setup: 'breakout', exit: 2, entry: 1, size: 1 },
+    { exit: 1, entry: 1, size: 1 },
+  ]);
+  const keys = rows.map((r) => r.setup);
+  assert.equal(rows.filter((r) => r.setup === 'M15 Demand')[0].count, 2);
+  assert.ok(keys.includes('breakout'));
+  assert.ok(keys.includes('(none)'));
+});
+
+test('byGrade: groups by grade with (ungraded) fallback', () => {
+  const rows = byGrade([
+    { grade: 'A', exit: 2, entry: 1, size: 1 },
+    { grade: 'A', exit: 0.5, entry: 1, size: 1 },
+    { exit: 2, entry: 1, size: 1 },
+  ]);
+  assert.equal(rows.find((r) => r.setup === 'A').count, 2);
+  assert.equal(rows.find((r) => r.setup === '(ungraded)').count, 1);
+});
+
+test('SETUP_FIELDS: seven names in order, each with at least two options', () => {
+  assert.deepEqual(SETUP_FIELDS.map((f) => f.name),
+    ['zone', 'zoneTf', 'grade', 'session', 'h1', 'tap', 'review']);
+  for (const f of SETUP_FIELDS) assert.ok(f.options.length >= 2, f.name);
 });

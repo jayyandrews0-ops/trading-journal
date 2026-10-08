@@ -1,8 +1,9 @@
 // Trading Journal — UI wiring. Data in db.js (IndexedDB), math in calc.js,
 // MT5 bridge payload handling in live.js (served by tools/serve.py at ./live).
 import * as db from './db.js';
-import { pnl, rMultiple, outcome, summarize, equitySeries, bySetup, roi, tradeTime,
-  equityPoints, manualBalanceEvents, niceTicks, indexStep } from './calc.js';
+import { pnl, rMultiple, outcome, summarize, equitySeries, bySetup, byGrade, roi, tradeTime,
+  equityPoints, manualBalanceEvents, niceTicks, indexStep, setupLabel,
+  SETUP_FIELDS } from './calc.js';
 import { buildPositions, accountSummary, liveEquitySeries,
   closePrice, liveFloating, contractSize, fxDivisor } from './live.js';
 
@@ -118,12 +119,20 @@ async function loadAnnotations() {
   annotationsById = new Map(list.map((a) => [a.positionId, a]));
 }
 
-// Live positions merged with the user's annotations (setup/notes/stopLoss/shot).
+// Live positions merged with the user's annotations (setup fields,
+// notes, stop loss, screenshot).
 function liveRows() {
   return positions.map((p) => {
     const a = annotationsById.get(p.positionId);
     return a ? {
       ...p,
+      zone: a.zone || '',
+      zoneTf: a.zoneTf || '',
+      grade: a.grade || '',
+      session: a.session || '',
+      h1: a.h1 || '',
+      tap: a.tap || '',
+      review: a.review || '',
       setup: a.setup || '',
       notes: a.notes || '',
       stopLoss: a.stopLoss ?? null,
@@ -465,7 +474,9 @@ function renderTrades() {
   const list = currentRows().filter((t) => {
     if (outcomeFilter !== 'ALL' && outcome(t) !== outcomeFilter) return false;
     if (!q) return true;
-    return [t.symbol, t.setup, t.notes].some((s) => (s || '').toLowerCase().includes(q));
+    return [t.symbol, t.setup, t.zone, t.zoneTf, t.grade, t.session,
+      t.h1, t.tap, t.review, t.notes]
+      .some((s) => (s || '').toLowerCase().includes(q));
   });
   if (!live) list.sort((a, b) => (b.date || '').localeCompare(a.date || '')); // live rows arrive pre-sorted
 
@@ -509,7 +520,9 @@ function renderTrades() {
     sub.textContent = [
       fmtDate(tradeTime(t)),
       isLive && t.volume != null ? `${t.volume} lots` : null,
-      t.setup,
+      setupLabel(t),
+      t.grade,
+      t.review,
     ].filter(Boolean).join(' · ');
     main.append(sym, sub);
 
@@ -567,12 +580,115 @@ $('#direction-seg').addEventListener('click', (e) => {
   if (btn) setDirection(btn.dataset.dir);
 });
 
-function refreshSetupDatalist() {
-  const setups = [...new Set(
-    [...trades, ...annotationsById.values()]
-      .map((t) => (t.setup || '').trim()).filter(Boolean)
-  )].sort();
-  $('#setup-list').innerHTML = setups.map((s) => `<option value="${s.replace(/"/g, '&quot;')}">`).join('');
+/* ---------- setup dropdowns ---------- */
+
+const CUSTOM_OPTIONS_KEY = 'journal.customOptions.v1';
+const ADD_VALUE = '__add__';
+
+function customOptions() {
+  try {
+    return JSON.parse(localStorage.getItem(CUSTOM_OPTIONS_KEY)) || {};
+  } catch {
+    return {};
+  }
+}
+
+function saveCustomOption(field, label) {
+  const all = customOptions();
+  const list = all[field] || (all[field] = []);
+  if (!list.some((v) => v.toLowerCase() === label.toLowerCase())) {
+    list.push(label);
+    localStorage.setItem(CUSTOM_OPTIONS_KEY, JSON.stringify(all));
+  }
+}
+
+// Option set for a field = defaults ∪ persisted customs ∪ values already
+// stored on trades/annotations (a stored value never renders as blank).
+function optionValuesFor(field) {
+  const def = SETUP_FIELDS.find((f) => f.name === field);
+  const seen = new Set();
+  const out = [];
+  const push = (v) => {
+    const k = v.toLowerCase();
+    if (!seen.has(k)) { seen.add(k); out.push(v); }
+  };
+  (def ? def.options : []).forEach(push);
+  (customOptions()[field] || []).forEach(push);
+  for (const t of [...trades, ...annotationsById.values()]) {
+    if (t[field]) push(t[field]);
+  }
+  return out;
+}
+
+function fillSelect(select, field) {
+  const cur = select.value;
+  select.innerHTML = '';
+  select.add(new Option('—', ''));
+  for (const v of optionValuesFor(field)) select.add(new Option(v, v));
+  select.add(new Option('＋ Add new…', ADD_VALUE));
+  select.value = cur;
+}
+
+// Insert a stored value into the list when it isn't already there so the
+// select can hold it (e.g. an option the user later removed).
+function ensureOption(select, value) {
+  if (!value) return '';
+  const found = [...select.options].find(
+    (o) => o.value !== ADD_VALUE && o.value.toLowerCase() === value.toLowerCase());
+  if (found) return found.value;
+  const addOpt = select.options[select.options.length - 1];
+  select.add(new Option(value, value), addOpt);
+  return value;
+}
+
+for (const f of SETUP_FIELDS) {
+  const select = form.elements[f.name];
+  const row = select.closest('.field').querySelector('.add-option-row');
+  const input = row.querySelector('input');
+  const commit = () => {
+    const v = input.value.trim();
+    if (v) {
+      const existing = [...select.options].find(
+        (o) => o.value !== ADD_VALUE
+          && o.value.toLowerCase() === v.toLowerCase());
+      if (existing) {
+        select.value = existing.value;
+      } else {
+        ensureOption(select, v);
+        select.value = v;
+        saveCustomOption(f.name, v);
+      }
+    }
+    row.hidden = true;
+  };
+  select.addEventListener('change', () => {
+    if (select.value === ADD_VALUE) {
+      select.value = '';
+      input.value = '';
+      row.hidden = false;
+      input.focus();
+    }
+  });
+  row.querySelector('button').addEventListener('click', commit);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); commit(); }
+  });
+}
+
+// Rebuild every select's option list and assign the record's values.
+function fillSetupSelects(src) {
+  for (const f of SETUP_FIELDS) {
+    const select = form.elements[f.name];
+    fillSelect(select, f.name);
+    select.value = ensureOption(select, src[f.name] || '');
+    select.closest('.field').querySelector('.add-option-row').hidden = true;
+  }
+}
+
+// Derived legacy label: set when a zone field is chosen, otherwise keep
+// whatever free-text setup the record already had.
+function setupFromSelects(obj, previous) {
+  return (obj.zone || obj.zoneTf) ? setupLabel(obj) : (previous || '');
 }
 
 function showScreenshotPreview(blob) {
@@ -613,7 +729,6 @@ function openForm(trade) {
   const delBtn = $('#btn-delete');
   delBtn.textContent = annotatePos ? 'Remove annotation' : 'Delete trade';
   delBtn.hidden = annotatePos ? !annotationsById.has(trade.positionId) : !trade;
-  refreshSetupDatalist();
 
   form.reset();
   form.querySelectorAll('.invalid').forEach((el) => el.classList.remove('invalid'));
@@ -624,7 +739,7 @@ function openForm(trade) {
   if (annotatePos) {
     fillAnnotateSummary(trade);
     const a = annotationsById.get(trade.positionId) || {};
-    form.setup.value = a.setup || '';
+    fillSetupSelects(a);
     form.stopLoss.value = a.stopLoss ?? '';
     form.notes.value = a.notes || '';
     $('#screenshot-input').value = '';
@@ -645,7 +760,7 @@ function openForm(trade) {
   form.size.value = trade && trade.size != null ? trade.size : '';
   form.stopLoss.value = trade && trade.stopLoss != null ? trade.stopLoss : '';
   form.fees.value = trade && trade.fees != null ? trade.fees : '';
-  form.setup.value = trade ? (trade.setup || '') : '';
+  fillSetupSelects(trade || {});
   form.notes.value = trade ? (trade.notes || '') : '';
   $('#screenshot-input').value = '';
 
@@ -752,13 +867,15 @@ form.addEventListener('submit', async (e) => {
     const slNum = slRaw === '' ? null : Number(slRaw);
     const a = {
       positionId: annotatePos.positionId,
-      setup: form.setup.value.trim(),
       stopLoss: slNum != null && isFinite(slNum) ? slNum : null,
       notes: form.notes.value,
       screenshot: screenshotBlob
         || (screenshotKept ? (annotationsById.get(annotatePos.positionId) || {}).screenshot || null : null),
       updatedAt: new Date().toISOString(),
     };
+    for (const f of SETUP_FIELDS) a[f.name] = form.elements[f.name].value;
+    a.setup = setupFromSelects(
+      a, (annotationsById.get(a.positionId) || {}).setup);
     await db.putAnnotation(a);
     annotationsById.set(a.positionId, a);
     closeForm();
@@ -775,11 +892,13 @@ form.addEventListener('submit', async (e) => {
     size: ft.size,
     stopLoss: ft.stopLoss,
     fees: ft.fees || 0,
-    setup: form.setup.value.trim(),
     notes: form.notes.value,
     screenshot: screenshotBlob || (screenshotKept ? (trades.find((t) => t.id === editingId) || {}).screenshot || null : null),
     updatedAt: new Date().toISOString(),
   };
+  for (const f of SETUP_FIELDS) trade[f.name] = form.elements[f.name].value;
+  trade.setup = setupFromSelects(
+    trade, (trades.find((t) => t.id === editingId) || {}).setup);
   if (!validate(trade)) return;
 
   if (editingId != null) {
@@ -852,7 +971,8 @@ function renderStats() {
   );
 
   drawEquity();
-  renderSetupTable();
+  renderBreakdown('#setup-table', '#setup-empty', bySetup(currentRows()));
+  renderBreakdown('#grade-table', '#grade-empty', byGrade(currentRows()));
 }
 
 function drawEquity() {
@@ -1081,11 +1201,10 @@ function drawEquityCurve(ctx, w, h, series, equity, isLive) {
   }
 }
 
-function renderSetupTable() {
-  const rows = bySetup(currentRows());
-  const tbody = document.querySelector('#setup-table tbody');
+function renderBreakdown(tableSel, emptySel, rows) {
+  const tbody = document.querySelector(tableSel + ' tbody');
   tbody.innerHTML = '';
-  $('#setup-empty').hidden = rows.length !== 0;
+  $(emptySel).hidden = rows.length !== 0;
   for (const r of rows) {
     const tr = document.createElement('tr');
     const wr = (r.wins / r.count * 100).toFixed(0) + '%';

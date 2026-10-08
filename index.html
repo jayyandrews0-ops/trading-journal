@@ -77,7 +77,7 @@
     <p id="history-caption" class="caption" hidden>Last 30 days from MT5 deal history</p>
     <p class="live-banner" hidden>Connection to MT5 lost — check the Mac</p>
     <div class="filter-bar">
-      <input id="search" type="search" placeholder="Search symbol, setup, notes…" autocomplete="off">
+      <input id="search" type="search" placeholder="Search symbol, setup, grade, notes…" autocomplete="off">
       <div class="chips" id="outcome-chips">
         <button class="chip active" data-outcome="ALL">All</button>
         <button class="chip" data-outcome="OPEN">Open</button>
@@ -108,6 +108,14 @@
         <tbody></tbody>
       </table>
       <p id="setup-empty" class="empty-state" hidden>No closed trades yet.</p>
+    </div>
+    <div class="card">
+      <h2>By grade</h2>
+      <table id="grade-table" class="setup-table">
+        <thead><tr><th>Grade</th><th>#</th><th>Win%</th><th>Net P&amp;L</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <p id="grade-empty" class="empty-state" hidden>No graded trades yet.</p>
     </div>
   </section>
 
@@ -183,11 +191,51 @@
           <span>Fees</span>
           <input name="fees" type="number" step="any" inputmode="decimal" placeholder="0">
         </label>
-        <label class="field">
-          <span>Setup</span>
-          <input name="setup" type="text" list="setup-list" placeholder="e.g. breakout" autocomplete="off">
-          <datalist id="setup-list"></datalist>
-        </label>
+      </div>
+
+      <div class="field-row">
+        <div class="field">
+          <span>Zone</span>
+          <select name="zone"></select>
+          <div class="add-option-row" hidden><input type="text" placeholder="New option" autocomplete="off"><button type="button" class="btn btn-secondary">Add</button></div>
+        </div>
+        <div class="field">
+          <span>Timeframe</span>
+          <select name="zoneTf"></select>
+          <div class="add-option-row" hidden><input type="text" placeholder="New option" autocomplete="off"><button type="button" class="btn btn-secondary">Add</button></div>
+        </div>
+      </div>
+
+      <div class="field-row">
+        <div class="field">
+          <span>Grade</span>
+          <select name="grade"></select>
+          <div class="add-option-row" hidden><input type="text" placeholder="New option" autocomplete="off"><button type="button" class="btn btn-secondary">Add</button></div>
+        </div>
+        <div class="field">
+          <span>Session</span>
+          <select name="session"></select>
+          <div class="add-option-row" hidden><input type="text" placeholder="New option" autocomplete="off"><button type="button" class="btn btn-secondary">Add</button></div>
+        </div>
+      </div>
+
+      <div class="field-row">
+        <div class="field">
+          <span>H1</span>
+          <select name="h1"></select>
+          <div class="add-option-row" hidden><input type="text" placeholder="New option" autocomplete="off"><button type="button" class="btn btn-secondary">Add</button></div>
+        </div>
+        <div class="field">
+          <span>Tap</span>
+          <select name="tap"></select>
+          <div class="add-option-row" hidden><input type="text" placeholder="New option" autocomplete="off"><button type="button" class="btn btn-secondary">Add</button></div>
+        </div>
+      </div>
+
+      <div class="field">
+        <span>Review</span>
+        <select name="review"></select>
+        <div class="add-option-row" hidden><input type="text" placeholder="New option" autocomplete="off"><button type="button" class="btn btn-secondary">Add</button></div>
       </div>
 
       <label class="field">

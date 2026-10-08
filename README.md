@@ -44,9 +44,10 @@ python3 tools/serve.py --data-dir "/path/to/MQL5/Files/ai_trading_platform_data"
 (or set `MT5_DATA_DIR`). The app polls `./live` every 5 s and, when present,
 switches Account/History/Stats to the live account: open positions with
 floating P&L, closed positions from the deal window, balance/equity/ROI from
-the account file. Tapping a live row lets you attach a setup tag, stop loss
-(for R), notes and a screenshot — stored locally as an annotation keyed by
-position id.
+the account file. Tapping a live row opens the same form as a manual trade: setup dropdowns
+(zone, timeframe, grade, session, H1, tap, review — each extensible with
+your own options right from the phone), stop loss (for R), notes and a
+screenshot — stored locally as an annotation keyed by position id.
 
 On any host without `./live` (e.g. GitHub Pages) the app silently runs in
 manual mode.

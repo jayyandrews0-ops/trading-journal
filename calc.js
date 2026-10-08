@@ -160,10 +160,36 @@ export function indexStep(n) {
   }
 }
 
-export function bySetup(trades) {
+/* ---------- setup descriptors ---------- */
+
+// The dropdown fields on the trade form, in display order. Option labels
+// are stored as-is (display strings); users can extend every list from
+// the "＋ Add new…" item in the form.
+export const SETUP_FIELDS = [
+  { name: 'zone',    label: 'Zone',      options: ['Supply', 'Demand'] },
+  { name: 'zoneTf',  label: 'Timeframe', options: ['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1'] },
+  { name: 'grade',   label: 'Grade',     options: ['A++', 'A+', 'A', 'B', 'C'] },
+  { name: 'session', label: 'Session',   options: ['Asia', 'London', 'New York'] },
+  { name: 'h1',      label: 'H1',        options: ['With H1', 'Against H1'] },
+  { name: 'tap',     label: 'Tap',       options: ['1st', '2nd', '3rd', '4th+'] },
+  { name: 'review',  label: 'Review',    options: [
+    'Followed plan', 'Early entry', 'Late entry', 'Moved SL',
+    'Held through invalidation', 'Closed early', 'Oversized',
+    'Revenge / FOMO', 'No setup',
+  ] },
+];
+
+// Derived setup label from the dropdown fields ("M15 Demand"), falling
+// back to a legacy free-text setup so older records still display.
+export function setupLabel(t) {
+  const derived = [t.zoneTf, t.zone].filter(Boolean).join(' ');
+  return derived || (t.setup || '').trim();
+}
+
+export function bySetup(trades, keyOf = (t) => setupLabel(t) || '(none)') {
   const map = new Map();
   for (const t of trades.filter(isClosed)) {
-    const key = (t.setup || '').trim() || '(none)';
+    const key = keyOf(t);
     const p = tradeNet(t) ?? 0;
     const row = map.get(key) || { setup: key, count: 0, wins: 0, net: 0 };
     row.count++;
@@ -172,4 +198,8 @@ export function bySetup(trades) {
     map.set(key, row);
   }
   return [...map.values()].sort((a, b) => b.net - a.net);
+}
+
+export function byGrade(trades) {
+  return bySetup(trades, (t) => t.grade || '(ungraded)');
 }
