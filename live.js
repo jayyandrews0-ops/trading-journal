@@ -162,17 +162,20 @@ export function liveEquitySeries(account, deals, openPositions) {
   for (let i = 1; i <= closed.length; i++) {
     while (di < post.length && post[di].time <= closed[i - 1].closeTime) {
       acc += post[di].delta;
-      points.push({ i, value: acc, kind: 'deposit', delta: post[di].delta });
+      points.push({ i, value: acc, kind: 'deposit', delta: post[di].delta,
+        time: post[di].time });
       di++;
     }
     acc += closed[i - 1].net || 0;
-    points.push({ i, value: acc, kind: 'trade', delta: closed[i - 1].net || 0 });
+    points.push({ i, value: acc, kind: 'trade', delta: closed[i - 1].net || 0,
+      time: closed[i - 1].closeTime });
   }
   // Deposits after the last close fold at the final index.
   const tailIdx = closed.length || 1;
   while (di < post.length) {
     acc += post[di].delta;
-    points.push({ i: tailIdx, value: acc, kind: 'deposit', delta: post[di].delta });
+    points.push({ i: tailIdx, value: acc, kind: 'deposit', delta: post[di].delta,
+      time: post[di].time });
     di++;
   }
   // Open/partial realised costs fold into the final point — never into the

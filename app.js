@@ -3,7 +3,7 @@
 import * as db from './db.js';
 import { pnl, rMultiple, outcome, summarize, equitySeries, bySetup, byGrade, roi, tradeTime,
   equityPoints, manualBalanceEvents, niceTicks, indexStep, setupLabel,
-  SETUP_FIELDS, groupByDay, dayLabel } from './calc.js';
+  SETUP_FIELDS, groupByDay, dayLabel, riskLines } from './calc.js';
 import { buildPositions, accountSummary, liveEquitySeries,
   closePrice, liveFloating, contractSize, fxDivisor } from './live.js';
 
@@ -45,6 +45,54 @@ function loadAccount() {
 }
 
 let account = loadAccount();
+
+const RULES_KEY = 'tj.rules';
+
+// Funded-account loss limits shown on the Stats equity curve.
+function loadRules() {
+  const num = (v, d) => {
+    if (v === undefined) return d;          // never stored -> default
+    return typeof v === 'number' && isFinite(v) && v > 0 ? v : null;
+  };
+  try {
+    const r = JSON.parse(localStorage.getItem(RULES_KEY) || '{}');
+    return {
+      dailyPct: num(r.dailyPct, 10),
+      weeklyPct: num(r.weeklyPct, 23),
+      show: typeof r.show === 'boolean' ? r.show : true,
+    };
+  } catch {
+    return { dailyPct: 10, weeklyPct: 23, show: true };
+  }
+}
+
+let rules = loadRules();
+
+function fillRulesForm() {
+  $('#rule-daily').value = rules.dailyPct ?? '';
+  $('#rule-weekly').value = rules.weeklyPct ?? '';
+  $('#rule-show').checked = rules.show;
+}
+
+for (const id of ['#rule-daily', '#rule-weekly', '#rule-show']) {
+  $(id).addEventListener('change', () => {
+    const pct = (v) => {
+      v = v.trim();
+      if (v === '') return null;
+      const n = Number(v);
+      return isFinite(n) && n > 0 ? n : null;
+    };
+    rules = {
+      dailyPct: pct($('#rule-daily').value),
+      weeklyPct: pct($('#rule-weekly').value),
+      show: $('#rule-show').checked,
+    };
+    localStorage.setItem(RULES_KEY, JSON.stringify(rules));
+    fillRulesForm();
+    if ($('#view-stats').classList.contains('active')) renderStats();
+  });
+}
+
 let moneyFmt = makeMoneyFmt(account.currency, true);   // signed: P&L
 let balFmt = makeMoneyFmt(account.currency, false);    // unsigned: balances
 const dateFmt = new Intl.DateTimeFormat(undefined, {
@@ -1059,24 +1107,49 @@ function drawEquity() {
   ctx.scale(dpr, dpr);
   ctx.clearRect(0, 0, w, h);
 
+  const caption = $('#risk-caption');
+
   if (live) {
     const series = liveEquitySeries(
       live.account, live.history || [], live.positions || []);
-    drawEquityCurve(ctx, w, h, series, liveEquity().equity, true);
+    const lines = rules.show
+      ? riskLines(series.points, rules) : null;
+    drawEquityCurve(ctx, w, h, series, liveEquity().equity, true, lines);
+    caption.textContent = riskCaptionText(rules, lines);
     return;
   }
 
   if (account.startingBalance == null) {
     drawPnlFallback(ctx, w, h);
+    caption.textContent = rules.show
+      ? riskCaptionText(rules, null) : 'Risk rules hidden';
     return;
   }
 
-  const deltas = manualBalanceEvents(trades)
-    .sort((a, b) => String(a.time).localeCompare(String(b.time)))
-    .map((e) => e.delta);
-  drawEquityCurve(ctx, w, h,
-    { label: 'Start', points: equityPoints(account.startingBalance, deltas) },
-    null, false);
+  const events = manualBalanceEvents(trades)
+    .sort((a, b) => String(a.time).localeCompare(String(b.time)));
+  const series = {
+    label: 'Start',
+    points: equityPoints(account.startingBalance, events),
+  };
+  const lines = rules.show ? riskLines(series.points, rules) : null;
+  drawEquityCurve(ctx, w, h, series, null, false, lines);
+  caption.textContent = riskCaptionText(rules, lines);
+}
+
+// "Daily −10% trailing · Weekly −23% fixed · Breaches: 1 daily, 0 weekly" —
+// unset rules are omitted; when no curve was drawn (no starting balance)
+// the breach clause is left off rather than faking zeros.
+function riskCaptionText(rules, lines) {
+  if (!rules.show) return 'Risk rules hidden';
+  const parts = [];
+  if (rules.dailyPct > 0) parts.push(`Daily −${rules.dailyPct}% trailing`);
+  if (rules.weeklyPct > 0) parts.push(`Weekly −${rules.weeklyPct}% fixed`);
+  if (lines) {
+    const count = (k) => lines.breaches.filter((b) => b.kind === k).length;
+    parts.push(`Breaches: ${count('daily')} daily, ${count('weekly')} weekly`);
+  }
+  return parts.length ? parts.join(' · ') : 'No risk rules set';
 }
 
 // Pre-balance view: plain cumulative net P&L when no starting balance is set.
@@ -1137,11 +1210,16 @@ function drawPnlFallback(ctx, w, h) {
 // ticks along the bottom, a dashed baseline at the start value carrying the
 // only non-axis label ("Deposit £103.10" / "Start …"), a plain polyline,
 // and a dotted connector to live equity when it differs from the balance.
-function drawEquityCurve(ctx, w, h, series, equity, isLive) {
+function drawEquityCurve(ctx, w, h, series, equity, isLive, lines) {
   const padL = 46, padR = 10, padT = 10, padB = 16;
   const pts = series.points;
   const values = pts.map((p) => p.value);
   if (equity != null && isFinite(equity)) values.push(equity);
+  if (lines) {
+    for (const arr of [lines.daily, lines.weekly]) {
+      for (const e of arr) if (e) values.push(e.value);
+    }
+  }
   let min = Math.min(...values), max = Math.max(...values);
   if (min === max) {
     const pad = Math.max(1, Math.abs(min) * 0.01);
@@ -1211,6 +1289,31 @@ function drawEquityCurve(ctx, w, h, series, equity, isLive) {
   ctx.textBaseline = 'bottom';
   ctx.fillText(`${series.label} ${balFmt.format(pts[0].value)}`, padL + 2, baseY - 3);
 
+  // loss-limit lines under the curve: amber trailing daily, red-dashed
+  // fixed weekly; null lifts the pen, reset starts a new segment.
+  if (lines) {
+    for (const [arr, color, dash] of [
+      [lines.daily, '#d29922', [3, 3]],
+      [lines.weekly, 'rgba(248,81,73,.75)', [6, 3]],
+    ]) {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1;
+      ctx.setLineDash(dash);
+      ctx.beginPath();
+      let pen = false;
+      for (let j = 0; j < arr.length; j++) {
+        const e = arr[j];
+        if (!e) { pen = false; continue; }
+        const px = x(pts[j].i), py = y(e.value);
+        if (!pen || e.reset) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+        pen = true;
+      }
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  }
+
   // the line: straight point-to-point segments. A deposit fold lifts the
   // line to the post-deposit level at the previous index — drawn separately
   // as a dotted vertical at x_i — so the following trade segment's slope is
@@ -1254,6 +1357,19 @@ function drawEquityCurve(ctx, w, h, series, equity, isLive) {
   ctx.beginPath();
   ctx.arc(ex, ey, 3.5, 0, Math.PI * 2);
   ctx.fill();
+
+  // breach markers: a small red ✕ at the offending point — no text.
+  if (lines) {
+    ctx.strokeStyle = '#f85149';
+    ctx.lineWidth = 1.5;
+    for (const b of lines.breaches) {
+      const px = x(b.i), py = y(b.value);
+      ctx.beginPath();
+      ctx.moveTo(px - 3.5, py - 3.5); ctx.lineTo(px + 3.5, py + 3.5);
+      ctx.moveTo(px - 3.5, py + 3.5); ctx.lineTo(px + 3.5, py - 3.5);
+      ctx.stroke();
+    }
+  }
 
   // live equity connector, unlabelled, when it differs from the balance
   if (isLive && equity != null && isFinite(equity)
@@ -1375,4 +1491,5 @@ async function reload() {
 }
 
 fillAccountForm();
+fillRulesForm();
 loadAnnotations().then(reload).then(startPolling);

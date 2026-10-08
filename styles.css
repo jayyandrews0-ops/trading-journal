@@ -349,6 +349,7 @@ html, body {
 .field input.invalid { border-color: var(--red); }
 
 .add-option-row { display: flex; gap: 8px; margin-top: 6px; }
+.check { display: flex; gap: 8px; align-items: center; margin: 6px 0 10px; }
 .add-option-row input { flex: 1; min-width: 0; }
 .add-option-row .btn { min-height: 40px; }
 

@@ -63,6 +63,22 @@
     <p class="caption">Computed from closed trades only.</p>
     <div id="account-stats" class="stats-grid"></div>
     </div>
+
+    <div class="card" id="risk-rules">
+      <h2>Funded-account rules</h2>
+      <div class="field-row">
+        <label class="field">
+          <span>Daily loss %</span>
+          <input id="rule-daily" type="number" step="any" inputmode="decimal" placeholder="10">
+        </label>
+        <label class="field">
+          <span>Weekly loss %</span>
+          <input id="rule-weekly" type="number" step="any" inputmode="decimal" placeholder="23">
+        </label>
+      </div>
+      <label class="check"><input id="rule-show" type="checkbox"> Show on equity curve</label>
+      <p class="caption">Daily trails the day's peak balance and resets each broker day; weekly is a fixed floor from the week's starting balance and resets Monday. Closed trades only — intraday swings are not recorded.</p>
+    </div>
   </section>
 
   <!-- ===== History view ===== -->
@@ -100,6 +116,7 @@
     <div class="card">
       <h2>Equity curve</h2>
       <canvas id="equity-canvas" class="equity-canvas"></canvas>
+      <p id="risk-caption" class="caption"></p>
     </div>
     <div class="card">
       <h2>By setup</h2>

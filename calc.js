@@ -115,13 +115,17 @@ export function manualBalanceEvents(trades) {
 }
 
 // Classic equity-curve points: index 0 is the starting balance, index i is
-// the balance after the i-th closed trade in time order.
-export function equityPoints(startBalance, deltas) {
+// the balance after the i-th event in time order. Events are { delta, time }
+// (what manualBalanceEvents produces); `time` is carried onto the point so
+// risk lines can key days/weeks.
+export function equityPoints(startBalance, events) {
   const points = [{ i: 0, value: startBalance, kind: 'start' }];
   let acc = startBalance;
-  (deltas || []).forEach((delta, k) => {
-    acc += delta;
-    points.push({ i: k + 1, value: acc, kind: 'trade', delta });
+  (events || []).forEach((e, k) => {
+    acc += e.delta;
+    const p = { i: k + 1, value: acc, kind: 'trade', delta: e.delta };
+    if (e.time !== undefined) p.time = e.time;
+    points.push(p);
   });
   return points;
 }
@@ -253,4 +257,97 @@ export function dayLabel(key, { now = new Date(), locale } = {}) {
     locale, { weekday: 'short', day: 'numeric', month: 'short' })
     .format(new Date(y, m - 1, d));
   return y === now.getFullYear() ? label : `${label} ${y}`;
+}
+
+/* ---------- funded-account risk lines ---------- */
+
+// Monday of the ISO week containing day 'YYYY-MM-DD' (local constructor, no
+// UTC). '' for invalid input.
+export function weekKey(day) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(day));
+  if (!m) return '';
+  const d = new Date(+m[1], +m[2] - 1, +m[3]);
+  d.setDate(d.getDate() - (d.getDay() + 6) % 7); // getDay: Sun=0 -> Mon=0
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+// Loss-limit lines aligned 1:1 with the equity points.
+//   daily:  pct% below the running DAY peak (trails, resets each broker day)
+//   weekly: pct% below the WEEK's starting balance (fixed, resets Monday)
+// On a breach the line freezes at its last level until the next reset, and
+// the point is recorded in `breaches`. Deposits shift the levels with the
+// money (a step) and are never breach-checked.
+export function riskLines(points, { dailyPct, weeklyPct } = {}) {
+  const result = { daily: [], weekly: [], breaches: [] };
+  if (!points.length) return result;
+  for (const [kind, pct] of [['daily', dailyPct], ['weekly', weeklyPct]]) {
+    result[kind] = riskLine(points, pct, kind, result.breaches);
+  }
+  result.breaches.sort((a, b) => a.i - b.i);
+  return result;
+}
+
+function riskLine(points, pct, kind, breaches) {
+  const arr = new Array(points.length).fill(null);
+  if (!(typeof pct === 'number' && isFinite(pct) && pct > 0)) return arr;
+
+  const keyOf = (p) => {
+    const day = String(p.time || '').slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return null;
+    return kind === 'daily' ? day : weekKey(day);
+  };
+  const line = () => (kind === 'daily' ? peak : periodStart) - allowance;
+
+  const start = points[0].value;
+  let periodStart = start;
+  let allowance = pct / 100 * start;
+  let peak = start;
+  let frozen = false;
+  let frozenValue = 0;
+  let period = null;
+  arr[0] = { value: start - allowance, reset: true };
+
+  for (let j = 1; j < points.length; j++) {
+    const p = points[j];
+    const key = keyOf(p);
+    let reset = false;
+    if (key !== null && key !== period) {
+      // The first dated point only adopts its period; a reset happens when
+      // an already-established period key changes.
+      reset = period !== null;
+      period = key;
+      if (reset) {
+        periodStart = points[j - 1].value;
+        allowance = pct / 100 * periodStart;
+        peak = periodStart;
+        frozen = false;
+      }
+    }
+    if (p.kind === 'deposit') {
+      periodStart += p.delta;
+      peak += p.delta;
+      if (frozen) frozenValue += p.delta;
+      // a step, never a breach check — frozen levels move with the money
+      arr[j] = { value: frozen ? frozenValue : line(), reset: true };
+      continue;
+    }
+    if (frozen) {
+      // One breach per period: no re-marking, no trailing, no unfreeze —
+      // only the next period reset clears this.
+      arr[j] = { value: frozenValue, reset };
+      continue;
+    }
+    const lineBefore = line();
+    if (p.value < lineBefore) {
+      breaches.push({ i: p.i, kind, value: p.value });
+      frozen = true;
+      frozenValue = lineBefore;
+      arr[j] = { value: frozenValue, reset };
+    } else {
+      if (kind === 'daily') peak = Math.max(peak, p.value);
+      arr[j] = { value: line(), reset };
+    }
+  }
+  return arr;
 }

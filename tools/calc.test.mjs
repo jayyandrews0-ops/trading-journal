@@ -4,11 +4,13 @@ import assert from 'node:assert/strict';
 
 import { equityPoints, manualBalanceEvents, niceTicks,
   setupLabel, bySetup, byGrade, SETUP_FIELDS,
-  dayKey, groupByDay, dayLabel } from '../calc.js';
+  dayKey, groupByDay, dayLabel, weekKey, riskLines } from '../calc.js';
 import { liveEquitySeries } from '../live.js';
 
 test('equityPoints: point 0 is the start, one point per trade', () => {
-  const pts = equityPoints(100, [3.1, -0.05, 0.8, -0.05, -0.72]);
+  const pts = equityPoints(100, [3.1, -0.05, 0.8, -0.05, -0.72]
+    .map((delta, k) => ({ delta, time: `2026-10-0${k + 5}T10:00` })));
+  assert.equal(pts[1].time, '2026-10-05T10:00');
   assert.equal(pts.length, 6);
   assert.deepEqual(pts[0], { i: 0, value: 100, kind: 'start' });
   assert.ok(Math.abs(pts[5].value - 103.08) < 1e-9);
@@ -200,4 +202,102 @@ test('dayLabel: weekday format, year suffix outside current year, Undated', () =
   assert.equal(dayLabel('2026-10-07', { now, locale: 'en-GB' }), 'Wed 7 Oct');
   assert.equal(dayLabel('2025-12-31', { now, locale: 'en-GB' }), 'Wed 31 Dec 2025');
   assert.equal(dayLabel(''), 'Undated');
+});
+
+const EPS = (a, b) => Math.abs(a - b) < 1e-9;
+
+test('weekKey: ISO week Monday', () => {
+  assert.equal(weekKey('2026-10-07'), '2026-10-05'); // Wed -> Mon
+  assert.equal(weekKey('2026-10-11'), '2026-10-05'); // Sunday belongs to that week
+  assert.equal(weekKey('2026-10-12'), '2026-10-12'); // next Monday
+  assert.equal(weekKey('junk'), '');
+});
+
+test('riskLines: daily trails the day peak, resets each day, breach freezes', () => {
+  const pts = equityPoints(100, [
+    { delta: 5,   time: '2026-10-05T10:00' },
+    { delta: -3,  time: '2026-10-05T12:00' },
+    { delta: -2,  time: '2026-10-06T09:00' },
+    { delta: -12, time: '2026-10-06T11:00' },
+  ]);
+  const r = riskLines(pts, { dailyPct: 10, weeklyPct: 23 });
+  assert.deepEqual(r.daily.map((e) => e.value), [90, 95, 95, 91.8, 91.8]);
+  assert.deepEqual(r.daily.map((e) => e.reset), [true, false, false, true, false]);
+  assert.deepEqual(r.breaches, [{ i: 4, kind: 'daily', value: 88 }]);
+  assert.ok(r.weekly.every((e) => EPS(e.value, 77)));
+  assert.deepEqual(r.weekly.map((e) => e.reset), [true, false, false, false, false]);
+});
+
+test('riskLines: weekly is fixed from the week start, resets Monday, breaches', () => {
+  const pts = equityPoints(100, [
+    { delta: 0,   time: '2026-10-07T10:00' },
+    { delta: 10,  time: '2026-10-13T10:00' },  // new ISO week
+    { delta: -35, time: '2026-10-14T10:00' },
+  ]);
+  const r = riskLines(pts, { dailyPct: null, weeklyPct: 23 });
+  // reset floor uses the PREVIOUS point's value (100), not the new balance
+  assert.deepEqual(r.weekly.map((e) => e.value), [77, 77, 77, 77]);
+  assert.deepEqual(r.weekly.map((e) => e.reset), [true, false, true, false]);
+  assert.deepEqual(r.breaches, [{ i: 3, kind: 'weekly', value: 75 }]);
+  assert.ok(r.daily.every((e) => e === null));
+});
+
+test('riskLines: a deposit shifts both lines with the money', () => {
+  const pts = [
+    { i: 0, value: 100, kind: 'start' },
+    { i: 1, value: 100, kind: 'trade', delta: 0, time: '2026-10-05T09:00' },
+    { i: 2, value: 150, kind: 'deposit', delta: 50, time: '2026-10-05T10:00' },
+    { i: 2, value: 151, kind: 'trade', delta: 1, time: '2026-10-05T11:00' },
+  ];
+  const r = riskLines(pts, { dailyPct: 10, weeklyPct: 23 });
+  assert.deepEqual(r.daily.map((e) => e.value), [90, 90, 140, 141]);
+  assert.equal(r.daily[2].reset, true);
+  assert.deepEqual(r.weekly.map((e) => e.value), [77, 77, 127, 127]);
+  assert.deepEqual(r.breaches, []);
+});
+
+test('riskLines: unset pcts draw nothing', () => {
+  const pts = equityPoints(100, [{ delta: 5, time: '2026-10-05T10:00' }]);
+  const r = riskLines(pts, { dailyPct: null, weeklyPct: 0 });
+  assert.ok(r.daily.every((e) => e === null));
+  assert.ok(r.weekly.every((e) => e === null));
+  assert.deepEqual(r.breaches, []);
+});
+
+test('riskLines: a breached period freezes — one mark, no unfreeze, no trail', () => {
+  const pts = equityPoints(100, [
+    { delta: -12, time: '2026-10-05T10:00' },  // 88 < 90: breach
+    { delta: -5,  time: '2026-10-05T12:00' },  // 83: below the frozen line, no mark
+    { delta: 9,   time: '2026-10-05T14:00' },  // 92: recovery does not unfreeze
+    { delta: -1,  time: '2026-10-06T09:00' },  // new day resets
+  ]);
+  const r = riskLines(pts, { dailyPct: 10, weeklyPct: null });
+  assert.deepEqual(r.breaches, [{ i: 1, kind: 'daily', value: 88 }]);
+  assert.deepEqual(r.daily.map((e) => e.value), [90, 90, 90, 90, 82.8]);
+  assert.deepEqual(r.daily.map((e) => e.reset), [true, false, false, false, true]);
+});
+
+test('riskLines: a deposit while frozen shifts the frozen level', () => {
+  const pts = [
+    { i: 0, value: 100, kind: 'start' },
+    { i: 1, value: 88,  kind: 'trade',   delta: -12, time: '2026-10-05T09:00' },
+    { i: 2, value: 138, kind: 'deposit', delta: 50,  time: '2026-10-05T10:00' },
+    { i: 2, value: 138, kind: 'trade',   delta: 0,   time: '2026-10-05T11:00' },
+  ];
+  const r = riskLines(pts, { dailyPct: 10, weeklyPct: null });
+  assert.deepEqual(r.breaches, [{ i: 1, kind: 'daily', value: 88 }]);
+  assert.deepEqual(r.daily.map((e) => e.value), [90, 90, 140, 140]);
+  assert.equal(r.daily[2].reset, true);
+});
+
+test('riskLines: weekly breaches once per week, Monday reset unfreezes', () => {
+  const pts = equityPoints(100, [
+    { delta: -30, time: '2026-10-07T10:00' },  // 70 < 77: weekly breach
+    { delta: -10, time: '2026-10-08T10:00' },  // 60: same week, not re-marked
+    { delta: 5,   time: '2026-10-13T10:00' },  // new week resets from 60
+  ]);
+  const r = riskLines(pts, { dailyPct: null, weeklyPct: 23 });
+  assert.deepEqual(r.breaches, [{ i: 1, kind: 'weekly', value: 70 }]);
+  assert.deepEqual(r.weekly.map((e) => e.value), [77, 77, 77, 46.2]);
+  assert.deepEqual(r.weekly.map((e) => e.reset), [true, false, false, true]);
 });
