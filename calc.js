@@ -203,3 +203,54 @@ export function bySetup(trades, keyOf = (t) => setupLabel(t) || '(none)') {
 export function byGrade(trades) {
   return bySetup(trades, (t) => t.grade || '(ungraded)');
 }
+
+/* ---------- day grouping ---------- */
+
+// Wall-clock day key from the row's sort timestamp — a plain string slice,
+// never a Date conversion (broker day vs phone day may differ near
+// midnight; slicing keeps whatever clock the row carries).
+export function dayKey(t) {
+  const key = String(tradeTime(t)).slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(key) ? key : '';
+}
+
+// Groups rows into days, newest first; the undated ('') group comes last.
+// Input order is preserved within each group. `net` sums closed rows only —
+// an open row's floating P&L changes with every tick and would go stale in
+// a header.
+export function groupByDay(trades) {
+  const map = new Map();
+  for (const t of trades) {
+    const key = dayKey(t);
+    let g = map.get(key);
+    if (!g) {
+      g = { key, trades: [], closed: 0, wins: 0, losses: 0, open: 0, net: 0 };
+      map.set(key, g);
+    }
+    g.trades.push(t);
+    if (isClosed(t)) {
+      g.closed++;
+      const p = tradeNet(t) ?? 0;
+      g.net += p;
+      if (p > 0) g.wins++;
+      else if (p < 0) g.losses++;
+    } else {
+      g.open++;
+    }
+  }
+  const keys = [...map.keys()].filter((k) => k !== '').sort().reverse();
+  if (map.has('')) keys.push('');
+  return keys.map((k) => map.get(k));
+}
+
+// "Wed 7 Oct" (+ " 2025" when the day is not in the current year).
+// Explicit dates only — no Today/Yesterday, since broker and phone days
+// can differ near midnight.
+export function dayLabel(key, { now = new Date(), locale } = {}) {
+  if (!key) return 'Undated';
+  const [y, m, d] = key.split('-').map(Number);
+  const label = new Intl.DateTimeFormat(
+    locale, { weekday: 'short', day: 'numeric', month: 'short' })
+    .format(new Date(y, m - 1, d));
+  return y === now.getFullYear() ? label : `${label} ${y}`;
+}

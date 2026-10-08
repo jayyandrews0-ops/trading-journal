@@ -3,7 +3,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { equityPoints, manualBalanceEvents, niceTicks,
-  setupLabel, bySetup, byGrade, SETUP_FIELDS } from '../calc.js';
+  setupLabel, bySetup, byGrade, SETUP_FIELDS,
+  dayKey, groupByDay, dayLabel } from '../calc.js';
 import { liveEquitySeries } from '../live.js';
 
 test('equityPoints: point 0 is the start, one point per trade', () => {
@@ -159,4 +160,44 @@ test('SETUP_FIELDS: seven names in order, each with at least two options', () =>
   assert.deepEqual(SETUP_FIELDS.map((f) => f.name),
     ['zone', 'zoneTf', 'grade', 'session', 'h1', 'tap', 'review']);
   for (const f of SETUP_FIELDS) assert.ok(f.options.length >= 2, f.name);
+});
+
+test('dayKey: live closeTime, manual date, junk and empty', () => {
+  assert.equal(dayKey({ source: 'live', closeTime: '2026-10-07T23:08:00' }), '2026-10-07');
+  assert.equal(dayKey({ date: '2026-10-06T09:30' }), '2026-10-06');
+  assert.equal(dayKey({ source: 'live', openTime: '2026-10-05T08:00:00' }), '2026-10-05');
+  assert.equal(dayKey({ date: 'not a date' }), '');
+  assert.equal(dayKey({}), '');
+});
+
+test('groupByDay: newest day first, undated last, per-day stats', () => {
+  const rows = [
+    { source: 'live', status: 'CLOSED', closeTime: '2026-10-06T10:00:00', net: 5 },
+    { source: 'live', status: 'CLOSED', closeTime: '2026-10-07T08:00:00', net: -3 },
+    { source: 'live', status: 'OPEN',   openTime:  '2026-10-07T09:00:00', net: 2, floating: 2 },
+    { source: 'live', status: 'CLOSED', closeTime: '2026-10-07T11:00:00', net: 10 },
+    { source: 'live', status: 'CLOSED', closeTime: '2026-10-06T12:00:00', net: 0 },
+    { notes: 'undated' },
+  ];
+  const groups = groupByDay(rows);
+  assert.deepEqual(groups.map((g) => g.key), ['2026-10-07', '2026-10-06', '']);
+
+  const d7 = groups[0];
+  assert.deepEqual([d7.closed, d7.wins, d7.losses, d7.open], [2, 1, 1, 1]);
+  assert.equal(d7.net, 7);                      // closed only; open row's floating excluded
+  assert.deepEqual(d7.trades.map((t) => t.net), [-3, 2, 10]); // input order kept
+
+  const d6 = groups[1];
+  assert.deepEqual([d6.closed, d6.wins, d6.losses, d6.open], [2, 1, 0, 0]);
+  assert.equal(d6.net, 5);
+
+  const undated = groups[2];
+  assert.deepEqual([undated.closed, undated.open], [0, 1]);
+});
+
+test('dayLabel: weekday format, year suffix outside current year, Undated', () => {
+  const now = new Date(2026, 9, 20);
+  assert.equal(dayLabel('2026-10-07', { now, locale: 'en-GB' }), 'Wed 7 Oct');
+  assert.equal(dayLabel('2025-12-31', { now, locale: 'en-GB' }), 'Wed 31 Dec 2025');
+  assert.equal(dayLabel(''), 'Undated');
 });

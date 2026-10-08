@@ -3,7 +3,7 @@
 import * as db from './db.js';
 import { pnl, rMultiple, outcome, summarize, equitySeries, bySetup, byGrade, roi, tradeTime,
   equityPoints, manualBalanceEvents, niceTicks, indexStep, setupLabel,
-  SETUP_FIELDS } from './calc.js';
+  SETUP_FIELDS, groupByDay, dayLabel } from './calc.js';
 import { buildPositions, accountSummary, liveEquitySeries,
   closePrice, liveFloating, contractSize, fxDivisor } from './live.js';
 
@@ -57,6 +57,7 @@ let positions = [];            // buildPositions() output (raw, un-annotated)
 let annotationsById = new Map();
 let searchText = '';
 let outcomeFilter = 'ALL';
+let expandedDays = null;      // Set<dayKey> once the first render runs
 let editingId = null;          // null => creating a new trade
 let annotatePos = null;        // live position being annotated (sheet open)
 let screenshotBlob = null;     // blob chosen in the form (downscaled)
@@ -490,7 +491,64 @@ function renderTrades() {
     : 'No trades yet. Tap + to log your first trade.';
   emptyEl.hidden = (live ? positions.length : trades.length) !== 0;
 
-  for (const t of list) {
+  const groups = groupByDay(list);
+  // First render: newest day open, the rest collapsed. Afterwards the
+  // user's choices are kept across live updates and filter changes.
+  if (expandedDays === null && groups.length) {
+    expandedDays = new Set([groups[0].key]);
+  }
+  const searching = q !== '';
+
+  for (const g of groups) {
+    const groupLi = document.createElement('li');
+    groupLi.className = 'day-group';
+    groupLi.dataset.day = g.key;
+
+    const expanded = searching || expandedDays.has(g.key);
+    const header = document.createElement('button');
+    header.type = 'button';
+    header.className = 'day-row';
+    header.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+
+    const chev = document.createElement('span');
+    chev.className = 'day-chev';
+    chev.textContent = '›';
+
+    const main = document.createElement('span');
+    main.className = 'day-main';
+    const label = document.createElement('div');
+    label.className = 'day-label';
+    label.textContent = dayLabel(g.key);
+    const sub = document.createElement('div');
+    sub.className = 'day-sub';
+    const parts = [
+      `${g.trades.length} ${g.trades.length === 1 ? 'trade' : 'trades'}`];
+    if (g.closed > 0) parts.push(`${g.wins}W ${g.losses}L`);
+    if (g.open > 0) parts.push(`${g.open} open`);
+    sub.textContent = parts.join(' · ');
+    main.append(label, sub);
+
+    const net = document.createElement('span');
+    if (g.closed > 0) {
+      net.className = 'day-net ' + pnlClass(g.net);
+      net.textContent = fmtPnl(g.net);
+    } else {
+      net.className = 'day-net flat';
+      net.textContent = '—';
+    }
+    header.append(chev, main, net);
+
+    const dayTrades = document.createElement('ul');
+    dayTrades.className = 'day-trades';
+    dayTrades.hidden = !expanded;
+    for (const t of g.trades) dayTrades.append(buildTradeLi(t));
+
+    groupLi.append(header, dayTrades);
+    ul.append(groupLi);
+  }
+}
+
+function buildTradeLi(t) {
     const li = document.createElement('li');
     const row = document.createElement('button');
     row.className = 'trade-row';
@@ -541,9 +599,23 @@ function renderTrades() {
     row.append(badgeWrap, main, right);
     row.addEventListener('click', () => openForm(t));
     li.append(row);
-    ul.append(li);
-  }
+    return li;
 }
+
+// Expand/collapse a day (one delegated listener; trade-row clicks inside
+// .day-trades don't match .day-row). Search re-renders expand every group
+// without touching expandedDays.
+$('#trade-list').addEventListener('click', (e) => {
+  const header = e.target.closest('.day-row');
+  if (!header) return;
+  const group = header.closest('.day-group');
+  const inner = group.querySelector('.day-trades');
+  const expand = inner.hidden;
+  inner.hidden = !expand;
+  header.setAttribute('aria-expanded', String(expand));
+  if (expand) expandedDays.add(group.dataset.day);
+  else expandedDays.delete(group.dataset.day);
+});
 
 $('#search').addEventListener('input', (e) => { searchText = e.target.value; renderTrades(); });
 
