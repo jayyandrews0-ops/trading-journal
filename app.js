@@ -3,7 +3,7 @@
 import * as db from './db.js';
 import { pnl, rMultiple, outcome, summarize, equitySeries, bySetup, byGrade, roi, tradeTime,
   equityPoints, manualBalanceEvents, niceTicks, indexStep, setupLabel,
-  SETUP_FIELDS, groupByDay, dayLabel, riskStatus } from './calc.js';
+  SETUP_FIELDS, groupByDay, dayLabel, riskStatus, monthGrid, dayState } from './calc.js';
 import { buildPositions, accountSummary, liveEquitySeries,
   closePrice, liveFloating, contractSize, fxDivisor,
   parseBrokerTime } from './live.js';
@@ -84,7 +84,7 @@ for (const id of ['#rule-daily', '#rule-weekly']) {
     };
     localStorage.setItem(RULES_KEY, JSON.stringify(rules));
     fillRulesForm();
-    if ($('#view-stats').classList.contains('active')) renderStats();
+    if ($('#view-calendar').classList.contains('active')) renderDrawdown();
   });
 }
 
@@ -234,6 +234,7 @@ function renderAll() {
   renderTrades();
   renderAccountStats();
   renderStats();
+  renderCalendar();
   // Banner only when a live session drops — a public host simply never had one.
   document.querySelectorAll('.live-banner')
     .forEach((b) => { b.hidden = !!live || !wasLive; });
@@ -366,11 +367,10 @@ function updateLiveDom() {
     v.className = 'roi-value ' + (roi > 0 ? 'pos' : roi < 0 ? 'neg' : 'flat');
     sub.textContent = `Net ${fmtPnl(equity - sum.deposits)} · Equity ${balFmt.format(equity)}`;
   }
-  // 4) drawdown panel + equity canvas tail, only while the Stats view is up
-  if ($('#view-stats').classList.contains('active')) {
-    renderDrawdown();
-    drawEquity();
-  }
+  // 4) equity canvas tail on Stats, drawdown panel on Calendar — the views
+  // that are actually on screen.
+  if ($('#view-stats').classList.contains('active')) drawEquity();
+  if ($('#view-calendar').classList.contains('active')) renderDrawdown();
 }
 
 function startPolling() {
@@ -395,6 +395,7 @@ document.querySelectorAll('.tab').forEach((btn) => {
     document.querySelectorAll('.view').forEach((v) => v.classList.remove('active'));
     $('#' + btn.dataset.view).classList.add('active');
     if (btn.dataset.view === 'view-stats') renderStats();
+    if (btn.dataset.view === 'view-calendar') renderCalendar();
     if (btn.dataset.view === 'view-account') renderAccountStats();
   });
 });
@@ -1111,14 +1112,112 @@ function renderStats() {
     statCard('Swap', s.closed && s.hasSwap ? fmtCost(s.swap) : '—'),
   );
 
-  renderDrawdown();
   drawEquity();
   renderBreakdown('#setup-table', '#setup-empty', bySetup(currentRows()));
   renderBreakdown('#grade-table', '#grade-empty', byGrade(currentRows()));
 }
 
-// Funded-account drawdown panel on Stats: balance/equity/period-start cards
-// plus a "£ left" bar per rule, measured against live equity.
+/* ================= calendar ================= */
+
+let calMonth = null; // { y, m } — initialised to "today" on first render
+
+function calendarToday() {
+  return live
+    ? parseBrokerTime(live.account.timestamp).slice(0, 10)
+    : localDatetimeNow().slice(0, 10);
+}
+
+// Live mode dims days before the export window: earliest deal day.
+function calendarEarliest() {
+  if (!live) return null;
+  let earliest = null;
+  for (const d of live.history || []) {
+    const k = parseBrokerTime(d.time).slice(0, 10);
+    if (k && (earliest === null || k < earliest)) earliest = k;
+  }
+  return earliest;
+}
+
+function renderCalendar() {
+  const today = calendarToday();
+  if (!calMonth) {
+    calMonth = { y: +today.slice(0, 4), m: +today.slice(5, 7) };
+  }
+  const earliest = calendarEarliest();
+  const groups = new Map(
+    groupByDay(currentRows()).map((g) => [g.key, g]));
+
+  $('#cal-title').textContent = new Intl.DateTimeFormat(undefined, {
+    month: 'long', year: 'numeric',
+  }).format(new Date(calMonth.y, calMonth.m - 1, 1));
+
+  const grid = $('#cal-grid');
+  grid.innerHTML = '';
+  let traded = 0, green = 0, red = 0, net = 0;
+  for (const cell of monthGrid(calMonth.y, calMonth.m)) {
+    const g = groups.get(cell.key);
+    const state = dayState(g, cell.key, { today, earliest });
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.dataset.day = cell.key;
+    btn.className = `cal-day ${state}`
+      + (cell.inMonth ? '' : ' out')
+      + (cell.key === today ? ' today' : '');
+    const num = document.createElement('span');
+    num.className = 'cal-num';
+    num.textContent = cell.day;
+    btn.append(num);
+    if (state === 'win' || state === 'loss' || state === 'flat') {
+      const netEl = document.createElement('span');
+      netEl.className = 'cal-net';
+      netEl.textContent = state === 'flat' ? balFmt.format(0) : fmtPnl(g.net);
+      btn.append(netEl);
+    } else {
+      btn.disabled = true; // nothing to open
+    }
+    grid.append(btn);
+    if (cell.inMonth && g && g.closed > 0) {
+      traded += 1;
+      if (g.net > 0) green += 1;
+      else if (g.net < 0) red += 1;
+      net += g.net;
+    }
+  }
+  $('#cal-summary').textContent = traded
+    ? `${traded} days traded · ${green} green · ${red} red · Net ${fmtPnl(net)}`
+    : 'No closed trades this month';
+
+  renderDrawdown(); // the drawdown card lives on this page
+}
+
+function stepCalMonth(delta) {
+  if (!calMonth) {
+    const today = calendarToday();
+    calMonth = { y: +today.slice(0, 4), m: +today.slice(5, 7) };
+  }
+  const d = new Date(calMonth.y, calMonth.m - 1 + delta, 1);
+  calMonth = { y: d.getFullYear(), m: d.getMonth() + 1 };
+  renderCalendar();
+}
+
+$('#cal-prev').addEventListener('click', () => stepCalMonth(-1));
+$('#cal-next').addEventListener('click', () => stepCalMonth(1));
+
+// Tapping a traded day jumps to it, expanded, in History.
+$('#cal-grid').addEventListener('click', (e) => {
+  const btn = e.target.closest('.cal-day');
+  if (!btn || btn.disabled) return;
+  const key = btn.dataset.day;
+  if (!expandedDays) expandedDays = new Set();
+  expandedDays.add(key);
+  document.querySelector('.tab[data-view="view-trades"]').click();
+  renderTrades();
+  document.querySelector(`.day-group[data-day="${key}"]`)
+    ?.scrollIntoView({ block: 'start' });
+});
+
+// Funded-account drawdown panel on Calendar: balance/equity/period-start
+// cards plus a "£ left" bar per rule, measured against live equity.
 function renderDrawdown() {
   const card = $('#drawdown-card');
   let points, equity, today;

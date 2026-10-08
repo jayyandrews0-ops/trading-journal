@@ -105,13 +105,19 @@
     <button id="fab" class="fab" aria-label="Add trade">+</button>
   </section>
 
-  <!-- ===== Stats view ===== -->
-  <section id="view-stats" class="view">
-    <header class="view-header">
-      <h1>Stats</h1>
-    </header>
-    <p class="caption" id="stats-caption">Computed from closed trades only.</p>
-    <div id="stats-grid" class="stats-grid"></div>
+  <!-- ===== Calendar view ===== -->
+  <section id="view-calendar" class="view">
+    <header class="view-header"><h1>Calendar</h1></header>
+    <div class="card">
+      <div class="cal-head">
+        <button type="button" id="cal-prev" class="cal-nav" aria-label="Previous month">‹</button>
+        <h2 id="cal-title"></h2>
+        <button type="button" id="cal-next" class="cal-nav" aria-label="Next month">›</button>
+      </div>
+      <div class="cal-dow"><span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span><span>S</span></div>
+      <div id="cal-grid" class="cal-grid"></div>
+      <p id="cal-summary" class="caption"></p>
+    </div>
     <div class="card" id="drawdown-card" hidden>
       <h2>Drawdown</h2>
       <div class="stats-grid" id="dd-grid"></div>
@@ -128,6 +134,15 @@
         <div class="dd-foot"><span>Weekly drawdown level</span><span class="dd-level"></span></div>
       </div>
     </div>
+  </section>
+
+  <!-- ===== Stats view ===== -->
+  <section id="view-stats" class="view">
+    <header class="view-header">
+      <h1>Stats</h1>
+    </header>
+    <p class="caption" id="stats-caption">Computed from closed trades only.</p>
+    <div id="stats-grid" class="stats-grid"></div>
     <div class="card">
       <h2>Equity curve</h2>
       <canvas id="equity-canvas" class="equity-canvas"></canvas>
@@ -159,6 +174,9 @@
   </button>
   <button class="tab" data-view="view-trades" aria-label="History">
     <span class="tab-icon">≡</span><span>History</span>
+  </button>
+  <button class="tab" data-view="view-calendar" aria-label="Calendar">
+    <span class="tab-icon">▦</span><span>Calendar</span>
   </button>
   <button class="tab" data-view="view-stats" aria-label="Stats">
     <span class="tab-icon">∿</span><span>Stats</span>

@@ -4,7 +4,8 @@ import assert from 'node:assert/strict';
 
 import { equityPoints, manualBalanceEvents, niceTicks, summarize,
   setupLabel, bySetup, byGrade, SETUP_FIELDS,
-  dayKey, groupByDay, dayLabel, weekKey, riskStatus } from '../calc.js';
+  dayKey, groupByDay, dayLabel, weekKey, riskStatus,
+  monthGrid, dayState } from '../calc.js';
 import { liveEquitySeries } from '../live.js';
 
 test('equityPoints: point 0 is the start, one point per trade', () => {
@@ -301,4 +302,32 @@ test('summarize: manual fees become negative commission, no swap', () => {
   assert.ok(EPS(s.commission, -3.5) && EPS(s.swap, 0),
     `${s.commission} / ${s.swap}`);
   assert.equal(s.hasSwap, false);
+});
+
+test('monthGrid: Monday-first 42 cells covering the month', () => {
+  const oct = monthGrid(2026, 10);
+  assert.equal(oct.length, 42);
+  assert.equal(oct[0].key, '2026-09-28'); // Oct 1 2026 is a Thursday
+  assert.deepEqual(oct[3], { key: '2026-10-01', day: 1, inMonth: true });
+  assert.equal(oct[33].key, '2026-10-31');
+  assert.equal(oct[34].inMonth, false);
+  const jun = monthGrid(2026, 6);
+  assert.equal(jun[0].key, '2026-06-01'); // June 1 2026 is a Monday
+});
+
+test('dayState: future > unknown > win/loss/flat > none', () => {
+  const opts = { today: '2026-10-08', earliest: '2026-10-05' };
+  const day = '2026-10-06';
+  assert.equal(dayState({ closed: 2, net: 10 }, day, opts), 'win');
+  assert.equal(dayState({ closed: 2, net: -5 }, day, opts), 'loss');
+  assert.equal(dayState({ closed: 2, net: 0 }, day, opts), 'flat');
+  assert.equal(dayState({ closed: 0, net: 3 }, day, opts), 'none'); // open only
+  assert.equal(dayState(null, day, opts), 'none');
+  assert.equal(dayState({ closed: 1, net: 9 }, '2026-10-09', opts), 'future');
+  assert.equal(dayState({ closed: 1, net: 9 }, '2026-10-04', opts), 'unknown');
+  // future wins over unknown when both would apply
+  assert.equal(
+    dayState({ closed: 1, net: 9 }, '2030-01-01',
+      { today: '2026-10-08', earliest: '2030-06-01' }),
+    'future');
 });

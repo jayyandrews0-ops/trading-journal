@@ -383,3 +383,35 @@ export function riskStatus(points, { dailyPct, weeklyPct } = {},
     weekly: status('weekly', weeklyPct),
   };
 }
+
+/* ---------- calendar ---------- */
+
+// 42 Monday-first cells covering the month: { key: 'YYYY-MM-DD', day, inMonth }.
+export function monthGrid(year, month) {
+  const first = new Date(year, month - 1, 1);
+  const lead = (first.getDay() + 6) % 7; // weekday of the 1st, 0 = Monday
+  const start = new Date(year, month - 1, 1 - lead);
+  const pad = (n) => String(n).padStart(2, '0');
+  const cells = [];
+  for (let i = 0; i < 42; i++) {
+    const d = new Date(
+      start.getFullYear(), start.getMonth(), start.getDate() + i);
+    cells.push({
+      key: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`,
+      day: d.getDate(),
+      inMonth: d.getMonth() === month - 1,
+    });
+  }
+  return cells;
+}
+
+// Colour of one calendar day: future > unknown (before the data window) >
+// win/loss/flat (has closed rows) > none.
+export function dayState(group, key, { today, earliest } = {}) {
+  if (today && key > today) return 'future';
+  if (earliest && key < earliest) return 'unknown';
+  if (!group || group.closed === 0) return 'none';
+  if (group.net > 0) return 'win';
+  if (group.net < 0) return 'loss';
+  return 'flat';
+}

@@ -12,8 +12,9 @@ IndexedDB on the device you use.
 
 Your journal is private and stored only on that device. Open the Account tab,
 enter your starting balance and currency, then log trades with the + button on
-the History tab. The Stats tab summarizes closed trades (win rate, profit
-factor, equity curve, per-setup breakdown).
+the History tab. The Calendar tab colours each day green/red/grey by closed
+P&L and hosts the drawdown-rules panel. The Stats tab summarizes closed
+trades (win rate, profit factor, equity curve, per-setup breakdown).
 
 ## Running locally
 
