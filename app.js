@@ -1140,6 +1140,8 @@ function renderDrawdown() {
   const eqCard = statCard('Current equity', balFmt.format(st.equity));
   eqCard.dataset.stat = 'dd-equity'; // patched by updateLiveDom
   grid.append(eqCard);
+  grid.append(statCard('Highest balance', balFmt.format(st.highest)));
+  grid.append(statCard('Lowest balance', balFmt.format(st.lowest)));
   if (st.daily) {
     grid.append(statCard("Today's starting balance",
       balFmt.format(st.daily.periodStart)));

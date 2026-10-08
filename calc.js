@@ -330,6 +330,15 @@ export function riskStatus(points, { dailyPct, weeklyPct } = {},
                            { today, equity } = {}) {
   const balance = points.length ? points[points.length - 1].value : 0;
   const eq = Number.isFinite(equity) ? equity : balance;
+  // Full closed-balance range over the loaded history (start included).
+  let highest = 0, lowest = 0;
+  if (points.length) {
+    highest = lowest = points[0].value;
+    for (const p of points) {
+      if (p.value > highest) highest = p.value;
+      if (p.value < lowest) lowest = p.value;
+    }
+  }
 
   const status = (kind, pct) => {
     if (!(typeof pct === 'number' && isFinite(pct) && pct > 0)) return null;
@@ -355,6 +364,8 @@ export function riskStatus(points, { dailyPct, weeklyPct } = {},
   return {
     balance,
     equity: eq,
+    highest,
+    lowest,
     daily: status('daily', dailyPct),
     weekly: status('weekly', weeklyPct),
   };

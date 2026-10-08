@@ -238,6 +238,7 @@ test('riskStatus: same-day trailing measured against live equity', () => {
   assert.ok(EPS(s.daily.periodStart, 100) && EPS(s.daily.allowance, 10)
     && EPS(s.daily.level, 100) && EPS(s.daily.left, 4)
     && EPS(s.daily.used, 0.6));
+  assert.ok(EPS(s.highest, 110) && EPS(s.lowest, 100));
 });
 
 test('riskStatus: under the level goes negative, then keeps trailing', () => {
@@ -255,6 +256,8 @@ test('riskStatus: under the level goes negative, then keeps trailing', () => {
   assert.ok(EPS(s.daily.periodStart, 100) && EPS(s.daily.allowance, 10)
     && EPS(s.daily.level, 93) && EPS(s.daily.left, 10)
     && EPS(s.daily.used, 0));
+  // 100 -> 88 -> 103: the range tracks the full path, not just the ends
+  assert.ok(EPS(s.highest, 103) && EPS(s.lowest, 88));
 });
 
 test('riskStatus: a new ISO week starts the weekly rule fresh', () => {
