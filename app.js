@@ -118,6 +118,12 @@ function pnlClass(p) {
   return p > 0 ? 'pos' : 'neg';
 }
 
+// Signed money, but an exact zero is unsigned ("£0.00", not "+£0.00").
+function fmtCost(v) {
+  if (v == null) return '—';
+  return v === 0 ? balFmt.format(0) : fmtPnl(v);
+}
+
 function fmtDate(iso) {
   const d = new Date(iso);
   return isNaN(d) ? (iso || '') : dateFmt.format(d);
@@ -1100,6 +1106,9 @@ function renderStats() {
     statCard('Streak', s.streak ? `${s.streak.count} ${s.streak.type}` : '—'),
     statCard('Best', s.best ? fmtPnl(s.best.pnl) : '—', s.best ? s.best.trade.symbol : ''),
     statCard('Worst', s.worst ? fmtPnl(s.worst.pnl) : '—', s.worst ? s.worst.trade.symbol : ''),
+    // Costs are negative numbers; exact zero reads "£0.00", not "+£0.00".
+    statCard('Commission', s.closed ? fmtCost(s.commission) : '—'),
+    statCard('Swap', s.closed && s.hasSwap ? fmtCost(s.swap) : '—'),
   );
 
   renderDrawdown();

@@ -56,6 +56,16 @@ export function roi(net, startingBalance) {
 export function summarize(trades) {
   const closed = trades.filter(isClosed);
   const pnls = closed.map((t) => ({ t, p: tradeNet(t) ?? 0 }));
+  let commission = 0, swap = 0, hasSwap = false;
+  for (const t of closed) {
+    if (t.source === 'live') {
+      commission += t.commission || 0;   // MT5 signs: costs are negative
+      swap += t.swap || 0;
+      hasSwap = true;
+    } else {
+      commission -= t.fees || 0;         // manual fees are entered positive
+    }
+  }
   const wins = pnls.filter((x) => x.p > 0);
   const losses = pnls.filter((x) => x.p < 0);
   const grossWins = wins.reduce((s, x) => s + x.p, 0);
@@ -92,6 +102,9 @@ export function summarize(trades) {
     best: best ? { trade: best.t, pnl: best.p } : null,
     worst: worst ? { trade: worst.t, pnl: worst.p } : null,
     streak: streakType ? { count: streak, type: streakType } : null,
+    commission,
+    swap,
+    hasSwap,
   };
 }
 

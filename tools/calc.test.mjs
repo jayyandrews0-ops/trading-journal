@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { equityPoints, manualBalanceEvents, niceTicks,
+import { equityPoints, manualBalanceEvents, niceTicks, summarize,
   setupLabel, bySetup, byGrade, SETUP_FIELDS,
   dayKey, groupByDay, dayLabel, weekKey, riskStatus } from '../calc.js';
 import { liveEquitySeries } from '../live.js';
@@ -277,4 +277,28 @@ test('riskStatus: defaults — equity falls back to balance, unset pct is null',
   assert.equal(s.equity, 95);          // equity omitted -> balance
   assert.ok(EPS(s.weekly.periodStart, 100) && EPS(s.weekly.level, 77)
     && EPS(s.weekly.left, 18) && EPS(s.weekly.used, 5 / 23));
+});
+
+test('summarize: commission and swap totals over closed live rows', () => {
+  const s = summarize([
+    { source: 'live', status: 'CLOSED', closeTime: '2026-10-05T10:00:00',
+      net: 2, commission: -0.30, swap: 0 },
+    { source: 'live', status: 'CLOSED', closeTime: '2026-10-05T12:00:00',
+      net: -1, commission: -0.45, swap: -0.12 },
+    { source: 'live', status: 'OPEN', openTime: '2026-10-05T13:00:00',
+      net: 0, commission: -0.15, swap: 0, floating: 0 },
+  ]);
+  assert.ok(EPS(s.commission, -0.75) && EPS(s.swap, -0.12),
+    `${s.commission} / ${s.swap}`);
+  assert.equal(s.hasSwap, true);
+});
+
+test('summarize: manual fees become negative commission, no swap', () => {
+  const s = summarize([
+    { date: '2026-10-05T10:00', entry: 1, exit: 2, size: 1, fees: 1.5 },
+    { date: '2026-10-05T12:00', entry: 1, exit: 0.5, size: 1, fees: 2 },
+  ]);
+  assert.ok(EPS(s.commission, -3.5) && EPS(s.swap, 0),
+    `${s.commission} / ${s.swap}`);
+  assert.equal(s.hasSwap, false);
 });
