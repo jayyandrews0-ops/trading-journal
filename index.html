@@ -65,7 +65,7 @@
     </div>
 
     <div class="card" id="risk-rules">
-      <h2>Funded-account rules</h2>
+      <h2>Drawdown rules</h2>
       <div class="field-row">
         <label class="field">
           <span>Daily loss %</span>
@@ -76,8 +76,7 @@
           <input id="rule-weekly" type="number" step="any" inputmode="decimal" placeholder="23">
         </label>
       </div>
-      <label class="check"><input id="rule-show" type="checkbox"> Show on equity curve</label>
-      <p class="caption">Daily trails the day's peak balance and resets each broker day; weekly is a fixed floor from the week's starting balance and resets Monday. Closed trades only — intraday swings are not recorded.</p>
+      <p class="caption">Daily trails the day's peak closed balance and resets each broker day; weekly is a fixed floor from the week's starting balance and resets Monday. Levels come from closed trades; remaining room is measured against live equity.</p>
     </div>
   </section>
 
@@ -113,10 +112,25 @@
     </header>
     <p class="caption" id="stats-caption">Computed from closed trades only.</p>
     <div id="stats-grid" class="stats-grid"></div>
+    <div class="card" id="drawdown-card" hidden>
+      <h2>Drawdown</h2>
+      <div class="stats-grid" id="dd-grid"></div>
+      <div class="dd-rule" id="dd-daily" hidden>
+        <div class="dd-title">Daily drawdown level (<span class="dd-pct"></span>)</div>
+        <div class="dd-left"></div>
+        <div class="dd-bar"></div>
+        <div class="dd-foot"><span>Daily drawdown level</span><span class="dd-level"></span></div>
+      </div>
+      <div class="dd-rule" id="dd-weekly" hidden>
+        <div class="dd-title">Weekly drawdown level (<span class="dd-pct"></span>)</div>
+        <div class="dd-left"></div>
+        <div class="dd-bar"></div>
+        <div class="dd-foot"><span>Weekly drawdown level</span><span class="dd-level"></span></div>
+      </div>
+    </div>
     <div class="card">
       <h2>Equity curve</h2>
       <canvas id="equity-canvas" class="equity-canvas"></canvas>
-      <p id="risk-caption" class="caption"></p>
     </div>
     <div class="card">
       <h2>By setup</h2>

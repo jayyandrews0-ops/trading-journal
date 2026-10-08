@@ -349,8 +349,21 @@ html, body {
 .field input.invalid { border-color: var(--red); }
 
 .add-option-row { display: flex; gap: 8px; margin-top: 6px; }
-.check { display: flex; gap: 8px; align-items: center; margin: 6px 0 10px; }
-.add-option-row input { flex: 1; min-width: 0; }
+.dd-rule {
+  margin-top: 12px;
+  padding: 12px 14px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.dd-title { color: var(--text-dim); font-size: 13px; }
+.dd-left { font-size: 24px; font-weight: 700; margin: 4px 0 8px; font-variant-numeric: tabular-nums; }
+.dd-left.breached { color: var(--red); }
+.dd-bar { display: flex; gap: 2px; }
+.dd-bar i { flex: 1; height: 22px; border-radius: 2px; background: #30363d; }
+.dd-bar i.used { background: var(--red); }
+.dd-foot { display: flex; justify-content: space-between; margin-top: 8px; color: var(--text-dim); font-size: 13px; }
+.dd-foot .dd-level { color: var(--text); font-variant-numeric: tabular-nums; }.add-option-row input { flex: 1; min-width: 0; }
 .add-option-row .btn { min-height: 40px; }
 
 .field-row { display: flex; gap: 12px; }

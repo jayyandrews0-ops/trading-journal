@@ -4,7 +4,8 @@ import assert from 'node:assert/strict';
 
 import { equityPoints, manualBalanceEvents, niceTicks,
   setupLabel, bySetup, byGrade, SETUP_FIELDS,
-  dayKey, groupByDay, dayLabel, weekKey, riskLines } from '../calc.js';
+  dayKey, groupByDay, dayLabel, weekKey, riskLines,
+  riskStatus } from '../calc.js';
 import { liveEquitySeries } from '../live.js';
 
 test('equityPoints: point 0 is the start, one point per trade', () => {
@@ -223,7 +224,8 @@ test('riskLines: daily trails the day peak, resets each day, breach freezes', ()
   const r = riskLines(pts, { dailyPct: 10, weeklyPct: 23 });
   assert.deepEqual(r.daily.map((e) => e.value), [90, 95, 95, 91.8, 91.8]);
   assert.deepEqual(r.daily.map((e) => e.reset), [true, false, false, true, false]);
-  assert.deepEqual(r.breaches, [{ i: 4, kind: 'daily', value: 88 }]);
+  assert.deepEqual(r.breaches,
+    [{ i: 4, kind: 'daily', value: 88, time: '2026-10-06T11:00' }]);
   assert.ok(r.weekly.every((e) => EPS(e.value, 77)));
   assert.deepEqual(r.weekly.map((e) => e.reset), [true, false, false, false, false]);
 });
@@ -238,7 +240,8 @@ test('riskLines: weekly is fixed from the week start, resets Monday, breaches', 
   // reset floor uses the PREVIOUS point's value (100), not the new balance
   assert.deepEqual(r.weekly.map((e) => e.value), [77, 77, 77, 77]);
   assert.deepEqual(r.weekly.map((e) => e.reset), [true, false, true, false]);
-  assert.deepEqual(r.breaches, [{ i: 3, kind: 'weekly', value: 75 }]);
+  assert.deepEqual(r.breaches,
+    [{ i: 3, kind: 'weekly', value: 75, time: '2026-10-14T10:00' }]);
   assert.ok(r.daily.every((e) => e === null));
 });
 
@@ -272,7 +275,8 @@ test('riskLines: a breached period freezes — one mark, no unfreeze, no trail',
     { delta: -1,  time: '2026-10-06T09:00' },  // new day resets
   ]);
   const r = riskLines(pts, { dailyPct: 10, weeklyPct: null });
-  assert.deepEqual(r.breaches, [{ i: 1, kind: 'daily', value: 88 }]);
+  assert.deepEqual(r.breaches,
+    [{ i: 1, kind: 'daily', value: 88, time: '2026-10-05T10:00' }]);
   assert.deepEqual(r.daily.map((e) => e.value), [90, 90, 90, 90, 82.8]);
   assert.deepEqual(r.daily.map((e) => e.reset), [true, false, false, false, true]);
 });
@@ -285,7 +289,8 @@ test('riskLines: a deposit while frozen shifts the frozen level', () => {
     { i: 2, value: 138, kind: 'trade',   delta: 0,   time: '2026-10-05T11:00' },
   ];
   const r = riskLines(pts, { dailyPct: 10, weeklyPct: null });
-  assert.deepEqual(r.breaches, [{ i: 1, kind: 'daily', value: 88 }]);
+  assert.deepEqual(r.breaches,
+    [{ i: 1, kind: 'daily', value: 88, time: '2026-10-05T09:00' }]);
   assert.deepEqual(r.daily.map((e) => e.value), [90, 90, 140, 140]);
   assert.equal(r.daily[2].reset, true);
 });
@@ -297,7 +302,64 @@ test('riskLines: weekly breaches once per week, Monday reset unfreezes', () => {
     { delta: 5,   time: '2026-10-13T10:00' },  // new week resets from 60
   ]);
   const r = riskLines(pts, { dailyPct: null, weeklyPct: 23 });
-  assert.deepEqual(r.breaches, [{ i: 1, kind: 'weekly', value: 70 }]);
+  assert.deepEqual(r.breaches,
+    [{ i: 1, kind: 'weekly', value: 70, time: '2026-10-07T10:00' }]);
   assert.deepEqual(r.weekly.map((e) => e.value), [77, 77, 77, 46.2]);
   assert.deepEqual(r.weekly.map((e) => e.reset), [true, false, false, true]);
+});
+
+test('riskStatus: fresh day inside the same week', () => {
+  const pts = equityPoints(100, [{ delta: -5, time: '2026-10-05T10:00' }]);
+  const s = riskStatus(pts, { dailyPct: 10, weeklyPct: 23 },
+    { today: '2026-10-06', equity: 95 });
+  assert.ok(EPS(s.daily.periodStart, 95) && EPS(s.daily.allowance, 9.5)
+    && EPS(s.daily.level, 85.5) && EPS(s.daily.left, 9.5)
+    && EPS(s.daily.used, 0) && s.daily.frozen === false
+    && s.daily.breach === null);
+  assert.ok(EPS(s.weekly.periodStart, 100) && EPS(s.weekly.allowance, 23)
+    && EPS(s.weekly.level, 77) && EPS(s.weekly.left, 18)
+    && EPS(s.weekly.used, 5 / 23));
+});
+
+test('riskStatus: same-day trailing measured against live equity', () => {
+  const pts = equityPoints(100, [
+    { delta: 10, time: '2026-10-05T10:00' },
+    { delta: -4, time: '2026-10-05T12:00' },
+  ]);
+  const s = riskStatus(pts, { dailyPct: 10, weeklyPct: null },
+    { today: '2026-10-05', equity: 104 });
+  assert.ok(EPS(s.daily.periodStart, 100) && EPS(s.daily.allowance, 10)
+    && EPS(s.daily.level, 100) && EPS(s.daily.left, 4)
+    && EPS(s.daily.used, 0.6));
+});
+
+test('riskStatus: breached today reports frozen level and the breach', () => {
+  const pts = equityPoints(100, [{ delta: -12, time: '2026-10-05T10:00' }]);
+  const s = riskStatus(pts, { dailyPct: 10, weeklyPct: null },
+    { today: '2026-10-05', equity: 88 });
+  assert.equal(s.daily.frozen, true);
+  assert.ok(EPS(s.daily.level, 90) && EPS(s.daily.left, -2)
+    && EPS(s.daily.used, 1));
+  assert.deepEqual(s.daily.breach,
+    { i: 1, value: 88, time: '2026-10-05T10:00' });
+});
+
+test('riskStatus: a new ISO week starts the weekly rule fresh', () => {
+  const pts = equityPoints(100, [{ delta: -30, time: '2026-10-07T10:00' }]);
+  const s = riskStatus(pts, { dailyPct: null, weeklyPct: 23 },
+    { today: '2026-10-13', equity: 70 });
+  assert.ok(EPS(s.weekly.periodStart, 70) && EPS(s.weekly.allowance, 16.1)
+    && EPS(s.weekly.level, 53.9) && EPS(s.weekly.left, 16.1)
+    && EPS(s.weekly.used, 0) && s.weekly.frozen === false
+    && s.weekly.breach === null);
+});
+
+test('riskStatus: defaults — equity falls back to balance, unset pct is null', () => {
+  const pts = equityPoints(100, [{ delta: -5, time: '2026-10-05T10:00' }]);
+  const s = riskStatus(pts, { dailyPct: null, weeklyPct: 23 },
+    { today: '' });                    // no today -> current period from state
+  assert.equal(s.daily, null);
+  assert.equal(s.equity, 95);          // equity omitted -> balance
+  assert.ok(EPS(s.weekly.periodStart, 100) && EPS(s.weekly.level, 77)
+    && EPS(s.weekly.left, 18) && EPS(s.weekly.used, 5 / 23));
 });
