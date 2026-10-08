@@ -170,6 +170,7 @@ export function indexStep(n) {
 // are stored as-is (display strings); users can extend every list from
 // the "＋ Add new…" item in the form.
 export const SETUP_FIELDS = [
+  { name: 'strategy', label: 'Strategy', options: ['STC'] },
   { name: 'zone',    label: 'Zone',      options: ['Supply', 'Demand'] },
   { name: 'zoneTf',  label: 'Timeframe', options: ['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1'] },
   { name: 'grade',   label: 'Grade',     options: ['A++', 'A+', 'A', 'B', 'C'] },
@@ -183,10 +184,11 @@ export const SETUP_FIELDS = [
   ] },
 ];
 
-// Derived setup label from the dropdown fields ("M15 Demand"), falling
-// back to a legacy free-text setup so older records still display.
+// Derived setup label from the dropdown fields ("STC · M15 Demand"),
+// falling back to a legacy free-text setup so older records still display.
 export function setupLabel(t) {
-  const derived = [t.zoneTf, t.zone].filter(Boolean).join(' ');
+  const zone = [t.zoneTf, t.zone].filter(Boolean).join(' ');
+  const derived = [t.strategy, zone].filter(Boolean).join(' · ');
   return derived || (t.setup || '').trim();
 }
 

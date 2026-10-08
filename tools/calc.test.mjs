@@ -127,7 +127,10 @@ test('manualBalanceEvents ignores open trades', () => {
   assert.ok(Math.abs(events[1].delta - 4) < 1e-9);
 });
 
-test('setupLabel: TF+zone derives, zone-only works, legacy fallback, empty', () => {
+test('setupLabel: strategy+zone derive, legacy fallback, empty', () => {
+  assert.equal(setupLabel({ strategy: 'STC', zoneTf: 'M15', zone: 'Demand' }),
+    'STC · M15 Demand');
+  assert.equal(setupLabel({ strategy: 'STC' }), 'STC');
   assert.equal(setupLabel({ zoneTf: 'M15', zone: 'Demand' }), 'M15 Demand');
   assert.equal(setupLabel({ zone: 'Demand' }), 'Demand');
   assert.equal(setupLabel({ zoneTf: 'M15' }), 'M15');
@@ -158,10 +161,10 @@ test('byGrade: groups by grade with (ungraded) fallback', () => {
   assert.equal(rows.find((r) => r.setup === '(ungraded)').count, 1);
 });
 
-test('SETUP_FIELDS: seven names in order, each with at least two options', () => {
+test('SETUP_FIELDS: eight names in order, strategy first', () => {
   assert.deepEqual(SETUP_FIELDS.map((f) => f.name),
-    ['zone', 'zoneTf', 'grade', 'session', 'h1', 'tap', 'review']);
-  for (const f of SETUP_FIELDS) assert.ok(f.options.length >= 2, f.name);
+    ['strategy', 'zone', 'zoneTf', 'grade', 'session', 'h1', 'tap', 'review']);
+  for (const f of SETUP_FIELDS) assert.ok(f.options.length >= 1, f.name);
 });
 
 test('dayKey: live closeTime, manual date, junk and empty', () => {

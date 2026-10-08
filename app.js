@@ -170,6 +170,7 @@ function liveRows() {
     const a = annotationsById.get(p.positionId);
     return a ? {
       ...p,
+      strategy: a.strategy || '',
       zone: a.zone || '',
       zoneTf: a.zoneTf || '',
       grade: a.grade || '',
@@ -521,7 +522,7 @@ function renderTrades() {
   const list = currentRows().filter((t) => {
     if (outcomeFilter !== 'ALL' && outcome(t) !== outcomeFilter) return false;
     if (!q) return true;
-    return [t.symbol, t.setup, t.zone, t.zoneTf, t.grade, t.session,
+    return [t.symbol, t.setup, t.strategy, t.zone, t.zoneTf, t.grade, t.session,
       t.h1, t.tap, t.review, t.notes]
       .some((s) => (s || '').toLowerCase().includes(q));
   });
@@ -734,6 +735,12 @@ function optionValuesFor(field) {
   (customOptions()[field] || []).forEach(push);
   for (const t of [...trades, ...annotationsById.values()]) {
     if (t[field]) push(t[field]);
+    // Pre-dropdown records typed their strategy into the free-text setup —
+    // offer those strings as strategy options.
+    if (field === 'strategy' && !t.strategy && !t.zone && !t.zoneTf) {
+      const legacy = (t.setup || '').trim();
+      if (legacy) push(legacy);
+    }
   }
   return out;
 }
@@ -795,18 +802,25 @@ for (const f of SETUP_FIELDS) {
 
 // Rebuild every select's option list and assign the record's values.
 function fillSetupSelects(src) {
+  // Old records carry a typed strategy in `setup` — pre-select it so
+  // re-saving migrates the string into the strategy field cleanly.
+  const legacyStrategy = !(src.strategy || src.zone || src.zoneTf)
+    ? (src.setup || '').trim() : '';
   for (const f of SETUP_FIELDS) {
     const select = form.elements[f.name];
     fillSelect(select, f.name);
-    select.value = ensureOption(select, src[f.name] || '');
+    const raw = f.name === 'strategy' && !src.strategy
+      ? legacyStrategy : (src[f.name] || '');
+    select.value = ensureOption(select, raw);
     select.closest('.field').querySelector('.add-option-row').hidden = true;
   }
 }
 
-// Derived legacy label: set when a zone field is chosen, otherwise keep
-// whatever free-text setup the record already had.
+// Derived legacy label: set when any dropdown field is chosen, otherwise
+// keep whatever free-text setup the record already had.
 function setupFromSelects(obj, previous) {
-  return (obj.zone || obj.zoneTf) ? setupLabel(obj) : (previous || '');
+  return (obj.strategy || obj.zone || obj.zoneTf)
+    ? setupLabel(obj) : (previous || '');
 }
 
 function showScreenshotPreview(blob) {
