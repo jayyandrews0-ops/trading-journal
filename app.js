@@ -175,8 +175,17 @@ async function loadAnnotations() {
 // notes, stop loss, screenshot).
 function liveRows() {
   return positions.map((p) => {
+    const q = qualityById.get(p.positionId);
+    const row = {
+      ...p,
+      mfe_pts: q?.mfe_pts ?? null,
+      mae_pts: q?.mae_pts ?? null,
+      capture: q?.capture ?? null,
+      excursion_status: q?.status ?? null,
+    };
     const a = annotationsById.get(p.positionId);
     return a ? {
+      ...row,
       ...p,
       strategy: a.strategy || '',
       zone: a.zone || '',
@@ -190,7 +199,7 @@ function liveRows() {
       notes: a.notes || '',
       stopLoss: a.stopLoss ?? null,
       screenshot: a.screenshot || null,
-    } : p;
+    } : row;
   });
 }
 
@@ -206,10 +215,38 @@ const liveFloatCache = new Map();
 let lastStreamAt = 0;     // ms epoch of the last live/tick stream event
 let tickFx = null;        // latest conversion-pair quote {pair, bid, ask}
 
+// Per-position excursion (MFE/MAE) measured by the platform, keyed by
+// position id. Refreshed via GET ./quality (60 s server cache).
+let qualityById = new Map();
+let qualityFetchedAt = 0;
+let qualityClosedKey = null;    // joined closed ids at the last fetch
+
+async function fetchQuality() {
+  try {
+    const res = await fetch('./quality', { cache: 'no-store' });
+    if (!res.ok) throw new Error('http ' + res.status);
+    const data = await res.json();
+    if (!data || !data.ok) throw new Error('quality unavailable');
+    qualityById = new Map(Object.entries(data.trades || {})
+      .map(([k, v]) => [Number(k), v]));
+    qualityFetchedAt = Date.now();
+    renderAll();
+  } catch { /* terminal API down — keep the last map (or none) */ }
+}
+
 function applyLiveData(data) {
   live = data && data.ok && data.account ? data : null;
   if (live) wasLive = true;
   positions = live ? buildPositions(live.history || [], live.positions || []) : [];
+  if (live) {
+    const closedKey = positions.filter((p) => p.status === 'CLOSED')
+      .map((p) => p.positionId).sort().join(',');
+    if (qualityClosedKey === null || closedKey !== qualityClosedKey
+        || Date.now() - qualityFetchedAt > 60000) {
+      qualityClosedKey = closedKey;
+      fetchQuality();
+    }
+  }
   for (const p of positions) {
     const cached = liveFloatCache.get(p.positionId);
     const anchor = `${p.floatingExported}|${p.currentPriceExported}`;
@@ -859,6 +896,23 @@ function fillAnnotateSummary(p) {
   l3.textContent = `opened ${fmtDate(p.openTime)}`
     + (p.closeTime ? ` · closed ${fmtDate(p.closeTime)}` : ' · still open');
   el.append(title, l2, l3);
+  // Platform-measured excursion for closed trades, when available.
+  if (p.status === 'CLOSED'
+      && Number.isFinite(p.mfe_pts) && Number.isFinite(p.mae_pts)) {
+    const l4 = document.createElement('div');
+    l4.className = 'as-line';
+    l4.textContent =
+      `Moved ${p.mfe_pts.toFixed(1)} pts for you · ${p.mae_pts.toFixed(1)} against`
+      + (Number.isFinite(p.capture)
+         ? ` · captured ${Math.round(p.capture * 100)}%` : '')
+      + ' (M1 closes)';
+    el.append(l4);
+  } else if (p.excursion_status === 'unavailable_source_mismatch') {
+    const l4 = document.createElement('div');
+    l4.className = 'as-line';
+    l4.textContent = 'Excursion not measured for this trade';
+    el.append(l4);
+  }
   el.hidden = false;
 }
 
@@ -1112,6 +1166,23 @@ function renderStats() {
     // Costs are negative numbers; exact zero reads "£0.00", not "+£0.00".
     statCard('Commission', s.closed ? fmtCost(s.commission) : '—'),
     statCard('Swap', s.closed && s.hasSwap ? fmtCost(s.swap) : '—'),
+    statCard('Expectancy',
+      s.closed ? fmtPnl(s.expectancy.mean)
+        + (s.expectancy.se != null
+           ? ` ± ${balFmt.format(s.expectancy.se)}` : '')
+        : '—',
+      s.closed ? `per trade · n=${s.expectancy.n}` : ''),
+    statCard('Avg move for / against',
+      s.excursion.n
+        ? `${s.excursion.avgMfe.toFixed(1)} / ${s.excursion.avgMae.toFixed(1)} pts`
+        : '—',
+      s.excursion.n
+        ? `M1 closes · ${s.excursion.n} of ${s.closed} measured`
+        : 'not measured'),
+    statCard('Avg captured',
+      s.excursion.nCapture
+        ? `${Math.round(s.excursion.avgCapture * 100)}%` : '—',
+      s.excursion.nCapture ? 'of the favourable move' : ''),
   );
 
   drawEquity();
@@ -1598,7 +1669,9 @@ function renderBreakdown(tableSel, emptySel, rows) {
   for (const r of rows) {
     const tr = document.createElement('tr');
     const wr = (r.wins / r.count * 100).toFixed(0) + '%';
-    for (const text of [r.setup, String(r.count), wr, fmtPnl(r.net)]) {
+    const avgR = r.avgR == null ? '—' : r.avgR.toFixed(2) + 'R';
+    for (const text of [r.setup, String(r.count), wr, avgR,
+                        fmtPnl(r.net)]) {
       const td = document.createElement('td');
       td.textContent = text;
       tr.append(td);

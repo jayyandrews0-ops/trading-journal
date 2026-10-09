@@ -363,3 +363,48 @@ test('countResults / summaryText', () => {
   assert.equal(summaryText({ total: 4, red: 2, green: 2 }), '4/2r/2g');
   assert.equal(summaryText({ total: 0, red: 0, green: 0 }), '0/0r/0g');
 });
+
+test('summarize: expectancy = mean net ± standard error', () => {
+  const s = summarize([
+    { date: '2026-10-05T10:00', entry: 1, exit: 2, size: 10 },   // +10
+    { date: '2026-10-05T11:00', entry: 1, exit: 0.5, size: 10 }, // -5
+    { date: '2026-10-05T12:00', entry: 1, exit: 1.5, size: 10 }, // +5
+  ]);
+  assert.ok(Math.abs(s.expectancy.mean - 10 / 3) < 1e-9);
+  assert.ok(Math.abs(s.expectancy.se - 4.4096) < 1e-3,
+    `se ${s.expectancy.se}`);
+  assert.equal(s.expectancy.n, 3);
+  const one = summarize([
+    { date: '2026-10-05T10:00', entry: 1, exit: 2, size: 10 }]);
+  assert.equal(one.expectancy.n, 1);
+  assert.equal(one.expectancy.se, null); // n-1 undefined for a single trade
+});
+
+test('summarize: excursion averages over measured closed rows only', () => {
+  const s = summarize([
+    { source: 'live', status: 'CLOSED', net: 5,
+      mfe_pts: 8, mae_pts: 3, capture: 0.5 },
+    { source: 'live', status: 'CLOSED', net: -2,
+      mfe_pts: 4, mae_pts: 5, capture: null },
+    { source: 'live', status: 'CLOSED', net: 1 },      // unmeasured
+    { source: 'live', status: 'OPEN' },                // not closed
+  ]);
+  assert.equal(s.excursion.n, 2);
+  assert.ok(EPS(s.excursion.avgMfe, 6) && EPS(s.excursion.avgMae, 4));
+  assert.equal(s.excursion.nCapture, 1);
+  assert.ok(EPS(s.excursion.avgCapture, 0.5));
+  const none = summarize([{ source: 'live', status: 'CLOSED', net: 1 }]);
+  assert.equal(none.excursion.n, 0);
+  assert.equal(none.excursion.avgMfe, null);
+});
+
+test('bySetup: avgR is the mean R of rows carrying a stop', () => {
+  const rows = bySetup([
+    { setup: 'brk', entry: 100, exit: 110, size: 1, stopLoss: 95 }, // R 2
+    { setup: 'brk', entry: 100, exit: 105, size: 1, stopLoss: 95 }, // R 1
+    { setup: 'brk', entry: 100, exit: 90, size: 1 },              // no stop
+    { setup: 'other', entry: 1, exit: 2, size: 1 },               // no stop
+  ]);
+  assert.equal(rows.find((r) => r.setup === 'brk').avgR, 1.5);
+  assert.equal(rows.find((r) => r.setup === 'other').avgR, null);
+});

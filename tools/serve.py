@@ -7,7 +7,9 @@ The data dir defaults to the Wine MT5 MQL5/Files/ai_trading_platform_data
 folder (or env MT5_DATA_DIR). It is only ever READ — the three whitelisted
 files account.json / history.json / positions.json are re-read on each
 GET /live request and returned verbatim; nothing is cached, nothing is
-written back.
+written back. GET /quality additionally proxies one loopback read from the
+terminal API (TERMINAL_API, default http://127.0.0.1:8765) and caches the
+result for 60 s in-process; it never writes anywhere either.
 """
 
 import argparse
@@ -15,7 +17,10 @@ import json
 import os
 import re
 import socket
+import threading
 import time
+import urllib.error
+import urllib.request
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -33,6 +38,14 @@ LIVE_FILES = {
 TICK_NAME_RE = re.compile(r"^tick_[A-Z0-9._]{3,12}\.json$")
 STREAM_INTERVAL = 0.25   # tick export cadence
 PING_INTERVAL = 15.0
+
+# /quality: per-position excursion (MFE/MAE) proxied from the terminal API's
+# human_vs_stc report — same read-only data the terminal serves. Closed-trade
+# quality is immutable, so a 60 s in-process cache is plenty fresh.
+TERMINAL_API = os.environ.get("TERMINAL_API", "http://127.0.0.1:8765")
+QUALITY_TTL = 60.0
+_quality_cache = {"at": 0.0, "body": None}
+_quality_lock = threading.Lock()
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -53,6 +66,8 @@ class Handler(SimpleHTTPRequestHandler):
             self.handle_live()
         elif path == "/live/stream":
             self.handle_live_stream()
+        elif path == "/quality":
+            self.handle_quality()
         else:
             super().do_GET()
 
@@ -86,13 +101,90 @@ class Handler(SimpleHTTPRequestHandler):
                 payload["errors"][key] = f"{fname}: {e}"
         return payload
 
-    def handle_live(self):
-        body = json.dumps(self.live_payload()).encode("utf-8")
+    def _send_json(self, payload):
+        body = json.dumps(payload).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def handle_live(self):
+        self._send_json(self.live_payload())
+
+    # -- /quality ---------------------------------------------------------
+    def _read_export(self, fname):
+        try:
+            with open(os.path.join(self.data_dir, fname), "rb") as f:
+                return json.loads(f.read().decode("utf-8"))
+        except Exception:
+            return None
+
+    def build_quality(self):
+        """Compact {position_id: excursion} map from the terminal API."""
+        errors = {}
+        account = self._read_export(LIVE_FILES["account"]) or {}
+        login = (str(account["login"]) if account.get("login")
+                 not in (None, "", 0) else None)
+        history = self._read_export(LIVE_FILES["history"]) or []
+        symbols = sorted({
+            str(d.get("symbol")).split(".")[0].upper()
+            for d in history
+            if isinstance(d, dict) and d.get("type") in (0, 1)
+            and d.get("symbol")})
+        if not symbols:
+            symbols = ["XAUUSD"]
+        trades = {}
+        for sym in symbols:
+            url = (f"{TERMINAL_API}/api/human_vs_stc?symbol={sym}"
+                   + (f"&account={login}" if login else ""))
+            try:
+                with urllib.request.urlopen(url, timeout=3) as res:
+                    data = json.loads(res.read().decode("utf-8"))
+            except urllib.error.HTTPError as e:
+                if e.code in (404, 422):
+                    errors[sym] = f"http {e.code}"
+                    continue
+                raise
+            for t in data.get("trades") or []:
+                pid = t.get("position_id")
+                if not isinstance(pid, (int, float)):
+                    continue
+                if login and str(t.get("account_login")) != login:
+                    continue
+                trades[str(int(pid))] = {
+                    "mfe_pts": t.get("mfe_pts"),
+                    "mae_pts": t.get("mae_pts"),
+                    "capture": t.get("capture"),
+                    "your_pts": t.get("your_pts"),
+                    "chased": t.get("chased"),
+                    "status": t.get("excursion_source_status"),
+                }
+        return {"ok": True, "fetched_at": time.time(), "account": login,
+                "symbols": symbols, "trades": trades, "errors": errors}
+
+    def handle_quality(self):
+        now = time.time()
+        with _quality_lock:
+            body = _quality_cache["body"]
+            hit = body is not None and now - _quality_cache["at"] < QUALITY_TTL
+        if hit:
+            # restamp so a cache hit is observable
+            payload = json.loads(body.decode("utf-8"))
+            payload["cached"] = True
+            self._send_json(payload)
+            return
+        try:
+            payload = self.build_quality()
+            payload["cached"] = False
+            if payload.get("ok"):
+                with _quality_lock:
+                    _quality_cache["at"] = now
+                    _quality_cache["body"] = json.dumps(payload).encode("utf-8")
+        except Exception as e:
+            payload = {"ok": False, "error": str(e), "trades": {},
+                       "cached": False}
+        self._send_json(payload)
 
     # -- /live/stream -----------------------------------------------------
     # Server-Sent Events: a "live" event on any account/positions/history
@@ -240,7 +332,8 @@ def main():
     print(f"Serving app  : http://127.0.0.1:{args.port}/", flush=True)
     ip = lan_ip()
     print(f"On iPhone    : http://{ip}:{args.port}/", flush=True)
-    print("Live endpoints: GET /live, GET /live/stream (SSE)", flush=True)
+    print("Live endpoints: GET /live, GET /live/stream (SSE), "
+          "GET /quality", flush=True)
 
     server = ThreadingHTTPServer(("0.0.0.0", args.port), Handler)
     try:

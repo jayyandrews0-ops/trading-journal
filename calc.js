@@ -66,6 +66,32 @@ export function summarize(trades) {
       commission -= t.fees || 0;         // manual fees are entered positive
     }
   }
+  // Expectancy: mean net per closed trade ± its standard error.
+  const n = closed.length;
+  const expMean = n ? pnls.reduce((s, x) => s + x.p, 0) / n : null;
+  let se = null;
+  if (n >= 2) {
+    const variance =
+      pnls.reduce((acc, x) => acc + (x.p - expMean) ** 2, 0) / (n - 1);
+    se = Math.sqrt(variance / n);
+  }
+  const expectancy = { mean: expMean, se, n };
+
+  // Platform-measured excursion (M1 bars) where the source matched.
+  const measured = closed.filter(
+    (t) => Number.isFinite(t.mfe_pts) && Number.isFinite(t.mae_pts));
+  const caps = measured.map((t) => t.capture).filter(Number.isFinite);
+  const excursion = {
+    n: measured.length,
+    avgMfe: measured.length
+      ? measured.reduce((s, t) => s + t.mfe_pts, 0) / measured.length : null,
+    avgMae: measured.length
+      ? measured.reduce((s, t) => s + t.mae_pts, 0) / measured.length : null,
+    avgCapture: caps.length
+      ? caps.reduce((a, b) => a + b, 0) / caps.length : null,
+    nCapture: caps.length,
+  };
+
   const wins = pnls.filter((x) => x.p > 0);
   const losses = pnls.filter((x) => x.p < 0);
   const grossWins = wins.reduce((s, x) => s + x.p, 0);
@@ -105,6 +131,8 @@ export function summarize(trades) {
     commission,
     swap,
     hasSwap,
+    expectancy,
+    excursion,
   };
 }
 
@@ -210,13 +238,17 @@ export function bySetup(trades, keyOf = (t) => setupLabel(t) || '(none)') {
   for (const t of trades.filter(isClosed)) {
     const key = keyOf(t);
     const p = tradeNet(t) ?? 0;
-    const row = map.get(key) || { setup: key, count: 0, wins: 0, net: 0 };
+    const row = map.get(key)
+      || { setup: key, count: 0, wins: 0, net: 0, rs: 0, nR: 0 };
     row.count++;
     if (p > 0) row.wins++;
     row.net += p;
+    const r = rMultiple(t);
+    if (r != null) { row.rs += r; row.nR += 1; }
     map.set(key, row);
   }
-  return [...map.values()].sort((a, b) => b.net - a.net);
+  return [...map.values()].sort((a, b) => b.net - a.net)
+    .map(({ rs, nR, ...row }) => ({ ...row, avgR: nR ? rs / nR : null }));
 }
 
 export function byGrade(trades) {

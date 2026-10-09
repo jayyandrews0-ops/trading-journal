@@ -50,5 +50,12 @@ the account file. Tapping a live row opens the same form as a manual trade: setu
 your own options right from the phone), stop loss (for R), notes and a
 screenshot — stored locally as an annotation keyed by position id.
 
+`GET ./quality` additionally proxies per-position excursion (MFE/MAE,
+capture) from the terminal API's human-vs-STC report — one loopback GET to
+`127.0.0.1:8765` per symbol, cached 60 s in-process. It feeds the
+Expectancy/excursion stat cards and a per-trade "Moved …" line on the
+annotate sheet; when the terminal API is absent it simply contributes
+nothing.
+
 On any host without `./live` (e.g. GitHub Pages) the app silently runs in
 manual mode.
