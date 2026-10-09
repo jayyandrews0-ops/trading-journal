@@ -618,3 +618,10 @@ html, body {
   padding: 24px 0;
   color: var(--text-dim);
 }
+
+.hour-canvas {
+  width: 100%;
+  height: 140px;
+  display: block;
+}
+.badge-reentry { background: rgba(210, 153, 34, .18); color: #d29922; }

@@ -6,7 +6,7 @@ import { equityPoints, manualBalanceEvents, niceTicks, summarize,
   setupLabel, bySetup, byGrade, SETUP_FIELDS,
   dayKey, groupByDay, dayLabel, weekKey, riskStatus,
   monthGrid, dayState, shiftDay, shiftMonth, weekDays, weekTitle,
-  countResults, summaryText } from '../calc.js';
+  countResults, summaryText, byHour, flagReentries } from '../calc.js';
 import { liveEquitySeries } from '../live.js';
 
 test('equityPoints: point 0 is the start, one point per trade', () => {
@@ -407,4 +407,60 @@ test('bySetup: avgR is the mean R of rows carrying a stop', () => {
   ]);
   assert.equal(rows.find((r) => r.setup === 'brk').avgR, 1.5);
   assert.equal(rows.find((r) => r.setup === 'other').avgR, null);
+});
+
+test('byHour buckets closed net by entry hour, 24 slots', () => {
+  const mk = (open, net, status = 'CLOSED') => ({
+    source: 'live', openTime: open, closeTime: open, status, net });
+  const hours = byHour([
+    mk('2026-10-05T09:15:00', 5),
+    mk('2026-10-05T09:40:00', -2),
+    mk('2026-10-06T14:05:00', 1),
+    mk('2026-10-05T09:50:00', 9, 'OPEN'),          // open — excluded
+    { source: 'live', status: 'CLOSED', net: 3,
+      openTime: 'not-a-time', closeTime: 'x' },   // unparseable — skipped
+  ]);
+  assert.equal(hours.length, 24);
+  assert.deepEqual(hours[9],
+    { hour: 9, count: 2, wins: 1, losses: 1, net: 3 });
+  assert.equal(hours[14].count, 1);
+  assert.equal(hours.filter((b) => b.count === 0).length, 22);
+});
+
+test('flagReentries flags opens within the window after a losing close', () => {
+  const mk = (open, close, net, status = 'CLOSED') => ({
+    source: 'live', openTime: open, closeTime: close, status, net });
+  const A = mk('2026-10-05T09:50:00', '2026-10-05T10:00:00', -10);
+  const B = mk('2026-10-05T10:03:00', '2026-10-05T10:06:00', 4);
+  const C = mk('2026-10-05T10:08:00', '2026-10-05T10:12:00', 4);
+  const W = mk('2026-10-05T10:25:00', '2026-10-05T10:30:00', 20);
+  const D = mk('2026-10-05T10:31:00', '2026-10-05T10:35:00', 3);
+  const E = mk('2026-10-05T09:58:00', '2026-10-05T10:02:00', 2);
+  const O = mk('2026-10-05T10:04:30', null, 0, 'OPEN');
+  const rows = [A, B, C, W, D, E, O];
+  const map = flagReentries(rows, 5);
+  assert.equal(map.size, 2);                      // B and the open O
+  const f = map.get(B);
+  assert.equal(f.gapMin, 3);
+  assert.equal(f.prevNet, -10);
+  assert.equal(map.get(O).gapMin, 4.5);           // any status can flag
+  assert.ok(!map.has(C));                         // 8m > 5m window
+  assert.ok(!map.has(D));                         // latest loss is 31m back
+  assert.ok(!map.has(E));                         // opened before A closed
+  assert.ok(!map.has(A));                         // never its own predecessor
+  assert.equal(flagReentries(rows, 0).size, 0);
+  assert.equal(flagReentries(rows, null).size, 0);
+});
+
+test('flagReentries manual rows: date is both open and close', () => {
+  const man = (date, exit) => ({
+    source: 'manual', direction: 'LONG',
+    entry: 1, exit, size: 100, date });
+  const mL = man('2026-10-05T10:00', 0.5);        // loss: -50
+  const mB = man('2026-10-05T10:03', 2);          // win, 3m later
+  const map = flagReentries([mL, mB], 5);
+  assert.ok(map.has(mB));
+  assert.equal(map.get(mB).gapMin, 3);
+  assert.equal(map.get(mB).prevNet, -50);
+  assert.ok(!map.has(mL));                        // a manual loss can't flag itself
 });

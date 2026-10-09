@@ -522,3 +522,73 @@ export function countResults(items, netOf) {
 export function summaryText({ total, red, green }) {
   return `${total}/${red}r/${green}g`;
 }
+
+/* ---------- net by entry hour ---------- */
+
+// Closed-row net bucketed by ENTRY hour in wall-clock time: live rows use
+// openTime, manual rows use date — both 'YYYY-MM-DDTHH…'.
+export function byHour(trades) {
+  const buckets = Array.from({ length: 24 },
+    (_, hour) => ({ hour, count: 0, wins: 0, losses: 0, net: 0 }));
+  for (const t of trades.filter(isClosed)) {
+    const str = t.source === 'live' ? t.openTime : t.date;
+    const m = /^\d{4}-\d{2}-\d{2}T(\d{2})/.exec(String(str));
+    if (!m) continue;
+    const h = Number(m[1]);
+    if (h > 23) continue;
+    const b = buckets[h];
+    const p = tradeNet(t) ?? 0;
+    b.count += 1;
+    b.net += p;
+    if (p > 0) b.wins += 1;
+    else if (p < 0) b.losses += 1;
+  }
+  return buckets;
+}
+
+/* ---------- re-entry after a loss ---------- */
+
+// 'YYYY-MM-DD[T ]HH:MM[:SS]' -> local Date. Both modes store wall-clock
+// strings; only the difference matters, so one regex + constructor serves
+// live closeTime/openTime and manual date alike.
+function parseWallClock(str) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?/
+    .exec(String(str));
+  return m
+    ? new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0))
+    : null;
+}
+
+// Flag rows that OPENED within `minutes` after the most recent losing
+// close before them. Sequential only — a row that opened before that loss
+// closed is not flagged, and the row itself never counts as its own loss.
+// Manual trades carry a single `date`, which stands in for both open and
+// close: a manual loss can flag later rows but never itself.
+export function flagReentries(rows, minutes) {
+  const out = new Map();
+  if (!(typeof minutes === 'number' && isFinite(minutes) && minutes > 0)) {
+    return out;
+  }
+  const losses = [];
+  for (const t of rows) {
+    const net = isClosed(t) ? (tradeNet(t) ?? 0) : null;
+    if (net === null || net >= 0) continue;
+    const at = parseWallClock(
+      t.source === 'live' ? t.closeTime : t.date);
+    if (at) losses.push({ at, net, row: t });
+  }
+  for (const t of rows) {
+    const open = parseWallClock(
+      t.source === 'live' ? t.openTime : t.date);
+    if (!open) continue;
+    let prev = null;
+    for (const l of losses) {
+      if (l.row === t || l.at > open) continue;
+      if (!prev || l.at > prev.at) prev = l;
+    }
+    if (!prev) continue;
+    const gapMin = Math.round(((open - prev.at) / 60000) * 10) / 10;
+    if (gapMin <= minutes) out.set(t, { gapMin, prevNet: prev.net });
+  }
+  return out;
+}

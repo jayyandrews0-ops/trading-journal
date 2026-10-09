@@ -5,7 +5,7 @@ import { pnl, rMultiple, outcome, summarize, equitySeries, bySetup, byGrade, roi
   equityPoints, manualBalanceEvents, niceTicks, indexStep, setupLabel,
   SETUP_FIELDS, groupByDay, dayLabel, riskStatus, monthGrid, dayState,
   isClosed, tradeNet, weekKey, shiftDay, shiftMonth, weekDays, weekTitle,
-  countResults, summaryText } from './calc.js';
+  countResults, summaryText, byHour, flagReentries } from './calc.js';
 import { buildPositions, accountSummary, liveEquitySeries,
   closePrice, liveFloating, contractSize, fxDivisor,
   parseBrokerTime } from './live.js';
@@ -59,9 +59,10 @@ function loadRules() {
   };
   try {
     const r = JSON.parse(localStorage.getItem(RULES_KEY) || '{}');
-    return { dailyPct: num(r.dailyPct, 10), weeklyPct: num(r.weeklyPct, 23) };
+    return { dailyPct: num(r.dailyPct, 10), weeklyPct: num(r.weeklyPct, 23),
+             reentryMin: num(r.reentryMin, 5) };
   } catch {
-    return { dailyPct: 10, weeklyPct: 23 };
+    return { dailyPct: 10, weeklyPct: 23, reentryMin: 5 };
   }
 }
 
@@ -70,9 +71,10 @@ let rules = loadRules();
 function fillRulesForm() {
   $('#rule-daily').value = rules.dailyPct ?? '';
   $('#rule-weekly').value = rules.weeklyPct ?? '';
+  $('#rule-reentry').value = rules.reentryMin ?? '';
 }
 
-for (const id of ['#rule-daily', '#rule-weekly']) {
+for (const id of ['#rule-daily', '#rule-weekly', '#rule-reentry']) {
   $(id).addEventListener('change', () => {
     const pct = (v) => {
       v = v.trim();
@@ -83,10 +85,13 @@ for (const id of ['#rule-daily', '#rule-weekly']) {
     rules = {
       dailyPct: pct($('#rule-daily').value),
       weeklyPct: pct($('#rule-weekly').value),
+      reentryMin: pct($('#rule-reentry').value),
     };
     localStorage.setItem(RULES_KEY, JSON.stringify(rules));
     fillRulesForm();
+    renderTrades(); // re-entry chips live on History rows
     if ($('#view-calendar').classList.contains('active')) renderDrawdown();
+    if ($('#view-stats').classList.contains('active')) renderStats();
   });
 }
 
@@ -408,7 +413,10 @@ function updateLiveDom() {
   }
   // 4) equity canvas tail on Stats, drawdown panel on Calendar — the views
   // that are actually on screen.
-  if ($('#view-stats').classList.contains('active')) drawEquity();
+  if ($('#view-stats').classList.contains('active')) {
+    drawEquity();
+    drawHours();
+  }
   if ($('#view-calendar').classList.contains('active')) renderDrawdown();
 }
 
@@ -565,7 +573,9 @@ $('#btn-save-account').addEventListener('click', () => {
 
 function renderTrades() {
   const q = searchText.trim().toLowerCase();
-  const list = currentRows().filter((t) => {
+  const rows = currentRows(); // one snapshot: flag keys must match row objects
+  const reentries = flagReentries(rows, rules.reentryMin);
+  const list = rows.filter((t) => {
     if (outcomeFilter !== 'ALL' && outcome(t) !== outcomeFilter) return false;
     if (!q) return true;
     return [t.symbol, t.setup, t.strategy, t.zone, t.zoneTf, t.grade, t.session,
@@ -634,14 +644,16 @@ function renderTrades() {
     const dayTrades = document.createElement('ul');
     dayTrades.className = 'day-trades';
     dayTrades.hidden = !expanded;
-    for (const t of g.trades) dayTrades.append(buildTradeLi(t));
+    for (const t of g.trades) {
+      dayTrades.append(buildTradeLi(t, reentries.get(t)));
+    }
 
     groupLi.append(header, dayTrades);
     ul.append(groupLi);
   }
 }
 
-function buildTradeLi(t) {
+function buildTradeLi(t, reentry) {
     const li = document.createElement('li');
     const row = document.createElement('button');
     row.className = 'trade-row';
@@ -659,6 +671,13 @@ function buildTradeLi(t) {
       openB.className = 'badge badge-open';
       openB.textContent = t.status;
       badgeWrap.append(' ', openB);
+    }
+    if (reentry) {
+      const re = document.createElement('span');
+      re.className = 'badge badge-reentry';
+      re.textContent = reentry.gapMin < 1
+        ? 're-entry <1m' : `re-entry ${Math.round(reentry.gapMin)}m`;
+      badgeWrap.append(' ', re);
     }
 
     const main = document.createElement('span');
@@ -1149,6 +1168,9 @@ function renderStats() {
   const s = summarize(currentRows());
   const grid = $('#stats-grid');
   grid.innerHTML = '';
+  const reentries = flagReentries(currentRows(), rules.reentryMin);
+  const flaggedNet = [...reentries.keys()].filter(isClosed)
+    .reduce((acc, t) => acc + (tradeNet(t) ?? 0), 0);
 
   const pf = s.profitFactor == null ? '—'
     : s.profitFactor === Infinity ? '∞'
@@ -1183,9 +1205,15 @@ function renderStats() {
       s.excursion.nCapture
         ? `${Math.round(s.excursion.avgCapture * 100)}%` : '—',
       s.excursion.nCapture ? 'of the favourable move' : ''),
+    statCard('Re-entries after a loss',
+      rules.reentryMin > 0 ? String(reentries.size) : '—',
+      rules.reentryMin > 0
+        ? `net ${fmtPnl(flaggedNet)} · within ${rules.reentryMin} min`
+        : 'rule off'),
   );
 
   drawEquity();
+  drawHours();
   renderBreakdown('#setup-table', '#setup-empty', bySetup(currentRows()));
   renderBreakdown('#grade-table', '#grade-empty', byGrade(currentRows()));
 }
@@ -1518,6 +1546,83 @@ function drawPnlFallback(ctx, w, h) {
     ctx.font = `${Number(ctx.font.match(/\d+/)[0]) - 1}px sans-serif`;
   }
   ctx.fillText(NO_BALANCE_HINT, w / 2, h - 4);
+}
+
+// Net P&L by entry hour (broker wall-clock), 24 bars off a zero baseline.
+function drawHours() {
+  const canvas = $('#hour-canvas');
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth;
+  const h = canvas.clientHeight;
+  if (!w || !h) return;
+  canvas.width = w * dpr;
+  canvas.height = h * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, w, h);
+
+  const buckets = byHour(currentRows());
+  const total = buckets.reduce((s, b) => s + b.count, 0);
+  // Manual rows are phone-local; live rows are broker time.
+  $('#hour-caption').textContent = `Net by entry hour · ${
+    live ? 'broker time' : 'local time'} · ${total} trades`;
+
+  if (!total) {
+    ctx.fillStyle = '#8b949e';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = '13px sans-serif';
+    ctx.fillText('No closed trades yet', w / 2, h / 2);
+    return;
+  }
+
+  const padL = 46, padR = 8, padT = 8, padB = 16;
+  let min = Math.min(0, ...buckets.map((b) => b.net));
+  let max = Math.max(0, ...buckets.map((b) => b.net));
+  if (min === max) { min -= 1; max += 1; }
+  const y = (v) => padT + (max - v) * (h - padT - padB) / (max - min);
+  const slot = (w - padL - padR) / 24;
+  const barW = slot * 0.7;
+
+  ctx.strokeStyle = '#30363d';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(padL, y(0));
+  ctx.lineTo(w - padR, y(0));
+  ctx.stroke();
+
+  // y labels: the extremes, plus 0 when the range crosses it
+  const numFmt = new Intl.NumberFormat(undefined,
+    { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  ctx.font = '10px sans-serif';
+  const labels = [max, min];
+  if (min < 0 && max > 0) labels.push(0);
+  const widest = labels.reduce(
+    (m, v) => Math.max(m, ctx.measureText(balFmt.format(v)).width), 0);
+  const tickFmt = widest <= padL - 8 ? balFmt : numFmt;
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#8b949e';
+  for (const v of labels) {
+    ctx.fillText(tickFmt.format(v), padL - 5, y(v));
+  }
+
+  for (const b of buckets) {
+    if (!b.count || b.net === 0) continue;
+    const cx = padL + (b.hour + 0.5) * slot;
+    const y0 = y(Math.max(0, b.net));
+    const y1 = y(Math.min(0, b.net));
+    ctx.fillStyle = b.net > 0 ? '#3fb950' : '#f85149';
+    ctx.fillRect(cx - barW / 2, y0, barW, y1 - y0);
+  }
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillStyle = '#8b949e';
+  for (let hh = 0; hh < 24; hh += 3) {
+    ctx.fillText(String(hh).padStart(2, '0'),
+      padL + (hh + 0.5) * slot, h - padB + 3);
+  }
 }
 
 // Classic equity curve: x = trade index (0 = starting balance), y = balance.

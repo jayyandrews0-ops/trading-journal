@@ -65,7 +65,7 @@
     </div>
 
     <div class="card" id="risk-rules">
-      <h2>Drawdown rules</h2>
+      <h2>Rules</h2>
       <div class="field-row">
         <label class="field">
           <span>Daily loss %</span>
@@ -76,7 +76,13 @@
           <input id="rule-weekly" type="number" step="any" inputmode="decimal" placeholder="23">
         </label>
       </div>
-      <p class="caption">Daily trails the day's peak closed balance by your %, resetting each broker day; weekly is a fixed floor below the week's starting balance, resetting Monday. Room left is measured against live equity.</p>
+      <div class="field-row">
+        <label class="field">
+          <span>Re-entry window after a loss (min)</span>
+          <input id="rule-reentry" type="number" step="1" inputmode="numeric" placeholder="5">
+        </label>
+      </div>
+      <p class="caption">Daily trails the day's peak closed balance by your %, resetting each broker day; weekly is a fixed floor below the week's starting balance, resetting Monday. Room left is measured against live equity. A trade opened within the re-entry window after a losing close is flagged on its History row.</p>
     </div>
   </section>
 
@@ -151,6 +157,11 @@
     <div class="card">
       <h2>Equity curve</h2>
       <canvas id="equity-canvas" class="equity-canvas"></canvas>
+    </div>
+    <div class="card">
+      <h2>By hour</h2>
+      <canvas id="hour-canvas" class="hour-canvas"></canvas>
+      <p id="hour-caption" class="caption"></p>
     </div>
     <div class="card">
       <h2>By setup</h2>
