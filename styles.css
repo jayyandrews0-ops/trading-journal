@@ -216,6 +216,10 @@ html, body {
 }
 .badge-long { background: rgba(63, 185, 80, .18); color: var(--green); }
 .badge-short { background: rgba(248, 81, 73, .18); color: var(--red); }
+.badge-wanted { background: rgba(63, 185, 80, .18); color: var(--green); }
+.badge-avoid { background: rgba(210, 153, 34, .18); color: var(--amber); }
+.badge-setup { background: var(--bg-3); color: var(--text-dim); }
+.badge-held { background: rgba(248, 81, 73, .18); color: var(--red); }
 
 .pos { color: var(--green); }
 .neg { color: var(--red); }

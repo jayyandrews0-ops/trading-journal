@@ -159,6 +159,11 @@ class Handler(SimpleHTTPRequestHandler):
                     "your_pts": t.get("your_pts"),
                     "chased": t.get("chased"),
                     "status": t.get("excursion_source_status"),
+                    "setup_class": t.get("setup_class"),
+                    "exit_vs_setup": t.get("exit_vs_setup"),
+                    "touch_number": t.get("touch_number"),
+                    "timeframe": t.get("timeframe"),
+                    "grade": t.get("grade"),
                 }
         return {"ok": True, "fetched_at": time.time(), "account": login,
                 "symbols": symbols, "trades": trades, "errors": errors}

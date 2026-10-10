@@ -592,3 +592,53 @@ export function flagReentries(rows, minutes) {
   }
   return out;
 }
+
+/* ---------- platform setup class ---------- */
+
+// 1 -> '1st', 2 -> '2nd', 11 -> '11th', 22 -> '22nd' …  null for non-positive
+// or non-integer input so chips can fall back instead of printing '0th'.
+export function ordinal(n) {
+  if (!Number.isInteger(n) || n < 1) return null;
+  const mod100 = n % 100;
+  const suffix = (mod100 >= 11 && mod100 <= 13) ? 'th'
+    : { 1: 'st', 2: 'nd', 3: 'rd' }[n % 10] || 'th';
+  return `${n}${suffix}`;
+}
+
+// Closed rows bucketed by the platform's declared-variant class, in a fixed
+// display order; every bucket renders even when empty. Only live rows carry
+// setup_class — manual rows (and live rows without a match) are "no setup".
+const SETUP_CLASS_ORDER = [
+  ['wanted', 'wanted'],
+  ['other', 'other setup'],
+  ['avoid', 'avoid set'],
+  ['none', 'no setup'],
+];
+export function bySetupClass(rows) {
+  const buckets = new Map(SETUP_CLASS_ORDER.map(
+    ([key, label]) => [key, { setup: label, count: 0, wins: 0, net: 0 }]));
+  for (const t of rows.filter(isClosed)) {
+    const cls = t.source === 'live' ? t.setup_class : null;
+    const b = buckets.get(buckets.has(cls) ? cls : 'none');
+    const p = tradeNet(t) ?? 0;
+    b.count++;
+    if (p > 0) b.wins++;
+    b.net += p;
+  }
+  return SETUP_CLASS_ORDER.map(([key]) => buckets.get(key));
+}
+
+// Closed live rows that were still open when their matched setup
+// invalidated — the discipline number the record keeps flagging.
+export function heldThroughStop(rows) {
+  let n = 0, net = 0;
+  for (const t of rows) {
+    if (t.source !== 'live' || !isClosed(t)
+        || t.exit_vs_setup !== 'held_through_invalidation') {
+      continue;
+    }
+    n++;
+    net += tradeNet(t) ?? 0;
+  }
+  return { n, net: n ? net : null };
+}

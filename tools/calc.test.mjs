@@ -6,7 +6,8 @@ import { equityPoints, manualBalanceEvents, niceTicks, summarize,
   setupLabel, bySetup, byGrade, SETUP_FIELDS,
   dayKey, groupByDay, dayLabel, weekKey, riskStatus,
   monthGrid, dayState, shiftDay, shiftMonth, weekDays, weekTitle,
-  countResults, summaryText, byHour, flagReentries } from '../calc.js';
+  countResults, summaryText, byHour, flagReentries,
+  ordinal, bySetupClass, heldThroughStop } from '../calc.js';
 import { liveEquitySeries } from '../live.js';
 
 test('equityPoints: point 0 is the start, one point per trade', () => {
@@ -463,4 +464,64 @@ test('flagReentries manual rows: date is both open and close', () => {
   assert.equal(map.get(mB).gapMin, 3);
   assert.equal(map.get(mB).prevNet, -50);
   assert.ok(!map.has(mL));                        // a manual loss can't flag itself
+});
+
+test('ordinal: 1st/2nd/3rd/4th, teens th, 21/22/23, null for junk', () => {
+  assert.deepEqual([1, 2, 3, 4, 11, 12, 13, 21, 22, 23, 101].map(ordinal),
+    ['1st', '2nd', '3rd', '4th', '11th', '12th', '13th',
+     '21st', '22nd', '23rd', '101st']);
+  assert.equal(ordinal(0), null);
+  assert.equal(ordinal(1.5), null);
+  assert.equal(ordinal(null), null);
+});
+
+test('bySetupClass: fixed order, buckets, manual rows -> no setup', () => {
+  const live = (cls, net, extra = {}) => ({
+    source: 'live', status: 'CLOSED', closeTime: '2026-10-05T10:00:00',
+    setup_class: cls, net, ...extra });
+  const rows = bySetupClass([
+    live('wanted', 4), live('wanted', -2),
+    live('other', 5),
+    live('avoid', -3), live('avoid', -1), live('avoid', 2),
+    live('none', 1),
+    live(null, 7),                                    // no platform class
+    { source: 'manual', entry: 1, exit: 2, size: 1,
+      date: '2026-10-05T09:00' },                     // manual win: +1
+    live('wanted', 99, { status: 'OPEN' }),           // open — excluded
+  ]);
+  assert.deepEqual(rows.map((r) => r.setup),
+    ['wanted', 'other setup', 'avoid set', 'no setup']);
+  const [wanted, other, avoid, none] = rows;
+  assert.deepEqual(
+    [wanted.count, wanted.wins, wanted.net], [2, 1, 2]);
+  assert.deepEqual([other.count, other.wins, other.net], [1, 1, 5]);
+  assert.deepEqual([avoid.count, avoid.wins, avoid.net], [3, 1, -2]);
+  // none(1) + no-class(7) + manual(1) = 9 net over 3 rows
+  assert.deepEqual([none.count, none.wins, none.net], [3, 3, 9]);
+});
+
+test('bySetupClass: empty input still returns the four rows at n=0', () => {
+  const rows = bySetupClass([]);
+  assert.deepEqual(rows.map((r) => r.setup),
+    ['wanted', 'other setup', 'avoid set', 'no setup']);
+  assert.ok(rows.every((r) => r.count === 0 && r.wins === 0 && r.net === 0));
+});
+
+test('heldThroughStop: counts closed live rows held through invalidation', () => {
+  const live = (exit, net, status = 'CLOSED') => ({
+    source: 'live', status, closeTime: '2026-10-05T10:00:00',
+    exit_vs_setup: exit, net });
+  const h = heldThroughStop([
+    live('held_through_invalidation', -5),
+    live('held_through_invalidation', -3.5),
+    live('before_target', 10),
+    live('n/a', 1),
+    live('held_through_invalidation', -9, 'OPEN'),   // open — excluded
+    { source: 'manual', entry: 1, exit: 0.5, size: 1,
+      date: '2026-10-05T09:00',
+      exit_vs_setup: 'held_through_invalidation' },  // manual — no flag
+  ]);
+  assert.deepEqual(h, { n: 2, net: -8.5 });
+  assert.deepEqual(heldThroughStop([]), { n: 0, net: null });
+  assert.deepEqual(heldThroughStop([live('n/a', 1)]), { n: 0, net: null });
 });

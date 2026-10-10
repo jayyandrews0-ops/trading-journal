@@ -5,7 +5,8 @@ import { pnl, rMultiple, outcome, summarize, equitySeries, bySetup, byGrade, roi
   equityPoints, manualBalanceEvents, niceTicks, indexStep, setupLabel,
   SETUP_FIELDS, groupByDay, dayLabel, riskStatus, monthGrid, dayState,
   isClosed, tradeNet, weekKey, shiftDay, shiftMonth, weekDays, weekTitle,
-  countResults, summaryText, byHour, flagReentries } from './calc.js';
+  countResults, summaryText, byHour, flagReentries,
+  ordinal, bySetupClass, heldThroughStop } from './calc.js';
 import { buildPositions, accountSummary, liveEquitySeries,
   closePrice, liveFloating, contractSize, fxDivisor,
   parseBrokerTime } from './live.js';
@@ -187,6 +188,13 @@ function liveRows() {
       mae_pts: q?.mae_pts ?? null,
       capture: q?.capture ?? null,
       excursion_status: q?.status ?? null,
+      // Platform setup-class fields; renamed where they would collide with
+      // the user's own annotation fields (grade).
+      setup_class: q?.setup_class ?? null,
+      exit_vs_setup: q?.exit_vs_setup ?? null,
+      touch_number: q?.touch_number ?? null,
+      setup_tf: q?.timeframe ?? null,
+      setup_grade: q?.grade ?? null,
     };
     const a = annotationsById.get(p.positionId);
     return a ? {
@@ -653,6 +661,28 @@ function renderTrades() {
   }
 }
 
+// The platform's declared-variant class for a live row -> a badge (null for
+// 'none' and unmatched rows, which get no chip). Wanted/avoid fall back to
+// the class's own definition when touch/tf fields are absent.
+function setupClassBadge(t) {
+  const b = document.createElement('span');
+  if (t.setup_class === 'wanted') {
+    b.className = 'badge badge-wanted';
+    b.textContent = `wanted · ${ordinal(t.touch_number) || '2nd'} touch`
+      + ` · ${t.setup_tf || 'M5+'}`;
+  } else if (t.setup_class === 'avoid') {
+    b.className = 'badge badge-avoid';
+    b.textContent = ordinal(t.touch_number)
+      ? `avoid · ${ordinal(t.touch_number)} touch` : 'avoid set';
+  } else if (t.setup_class === 'other') {
+    b.className = 'badge badge-setup';
+    b.textContent = `setup · ${t.setup_grade || '?'}`;
+  } else {
+    return null;
+  }
+  return b;
+}
+
 function buildTradeLi(t, reentry) {
     const li = document.createElement('li');
     const row = document.createElement('button');
@@ -678,6 +708,16 @@ function buildTradeLi(t, reentry) {
       re.textContent = reentry.gapMin < 1
         ? 're-entry <1m' : `re-entry ${Math.round(reentry.gapMin)}m`;
       badgeWrap.append(' ', re);
+    }
+    if (isLive) {
+      const cls = setupClassBadge(t);
+      if (cls) badgeWrap.append(' ', cls);
+      if (t.exit_vs_setup === 'held_through_invalidation') {
+        const held = document.createElement('span');
+        held.className = 'badge badge-held';
+        held.textContent = 'held through stop';
+        badgeWrap.append(' ', held);
+      }
     }
 
     const main = document.createElement('span');
@@ -898,6 +938,27 @@ function showScreenshotPreview(blob) {
   $('#screenshot-label').textContent = blob ? 'Change image…' : 'Choose image…';
 }
 
+// One-line description of the platform's setup match for the annotate sheet
+// — the same classes as the History chips. null when no class is recorded.
+function setupClassLine(p) {
+  switch (p.setup_class) {
+    case 'wanted':
+      return `wanted · ${ordinal(p.touch_number) || '2nd'} touch`
+        + ` · ${p.setup_tf || 'M5+'}`;
+    case 'avoid':
+      return 'avoid set'
+        + (ordinal(p.touch_number)
+           ? ` · ${ordinal(p.touch_number)} touch` : '');
+    case 'other':
+      return 'other setup'
+        + (p.setup_grade ? ` · grade ${p.setup_grade}` : '');
+    case 'none':
+      return 'none';
+    default:
+      return null;
+  }
+}
+
 // Read-only header shown when annotating a live position.
 function fillAnnotateSummary(p) {
   const el = $('#annotate-summary');
@@ -931,6 +992,19 @@ function fillAnnotateSummary(p) {
     l4.className = 'as-line';
     l4.textContent = 'Excursion not measured for this trade';
     el.append(l4);
+  }
+  const clsLine = setupClassLine(p);
+  if (clsLine) {
+    const l5 = document.createElement('div');
+    l5.className = 'as-line';
+    l5.textContent = `Setup: ${clsLine}`;
+    el.append(l5);
+  }
+  if (p.exit_vs_setup === 'held_through_invalidation') {
+    const l6 = document.createElement('div');
+    l6.className = 'as-line';
+    l6.textContent = "Exit: held through the setup's stop";
+    el.append(l6);
   }
   el.hidden = false;
 }
@@ -1165,12 +1239,14 @@ function statCard(label, value, sub) {
 }
 
 function renderStats() {
-  const s = summarize(currentRows());
+  const rows = currentRows();
+  const s = summarize(rows);
   const grid = $('#stats-grid');
   grid.innerHTML = '';
-  const reentries = flagReentries(currentRows(), rules.reentryMin);
+  const reentries = flagReentries(rows, rules.reentryMin);
   const flaggedNet = [...reentries.keys()].filter(isClosed)
     .reduce((acc, t) => acc + (tradeNet(t) ?? 0), 0);
+  const held = heldThroughStop(rows);
 
   const pf = s.profitFactor == null ? '—'
     : s.profitFactor === Infinity ? '∞'
@@ -1210,12 +1286,36 @@ function renderStats() {
       rules.reentryMin > 0
         ? `net ${fmtPnl(flaggedNet)} · within ${rules.reentryMin} min`
         : 'rule off'),
+    statCard('Held through stop',
+      held.n ? `${held.n} · net ${fmtPnl(held.net)}` : '—',
+      held.n ? 'closed live trades' : ''),
   );
 
   drawEquity();
   drawHours();
-  renderBreakdown('#setup-table', '#setup-empty', bySetup(currentRows()));
-  renderBreakdown('#grade-table', '#grade-empty', byGrade(currentRows()));
+  renderBreakdown('#setup-table', '#setup-empty', bySetup(rows));
+  renderBreakdown('#grade-table', '#grade-empty', byGrade(rows));
+  renderClassTable(bySetupClass(rows));
+}
+
+// Fixed four rows — wanted / other setup / avoid set / no setup — n · win%
+// · net. Empty buckets still render with '—' so the table always shows the
+// whole classification.
+function renderClassTable(rows) {
+  const tbody = document.querySelector('#class-table tbody');
+  tbody.innerHTML = '';
+  for (const r of rows) {
+    const tr = document.createElement('tr');
+    const wr = r.count ? (r.wins / r.count * 100).toFixed(0) + '%' : '—';
+    const net = r.count ? fmtPnl(r.net) : '—';
+    for (const text of [r.setup, String(r.count), wr, net]) {
+      const td = document.createElement('td');
+      td.textContent = text;
+      tr.append(td);
+    }
+    if (r.count) tr.lastChild.className = pnlClass(r.net);
+    tbody.append(tr);
+  }
 }
 
 /* ================= calendar ================= */
