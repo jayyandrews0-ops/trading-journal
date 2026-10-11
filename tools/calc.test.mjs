@@ -7,7 +7,7 @@ import { equityPoints, manualBalanceEvents, niceTicks, summarize,
   dayKey, groupByDay, dayLabel, weekKey, riskStatus,
   monthGrid, dayState, shiftDay, shiftMonth, weekDays, weekTitle,
   countResults, summaryText, byHour, flagReentries,
-  ordinal, bySetupClass, heldThroughStop } from '../calc.js';
+  ordinal, bySetupClass, byVerdict, heldThroughStop } from '../calc.js';
 import { liveEquitySeries } from '../live.js';
 
 test('equityPoints: point 0 is the start, one point per trade', () => {
@@ -504,6 +504,36 @@ test('bySetupClass: empty input still returns the four rows at n=0', () => {
   const rows = bySetupClass([]);
   assert.deepEqual(rows.map((r) => r.setup),
     ['wanted', 'other setup', 'avoid set', 'no setup']);
+  assert.ok(rows.every((r) => r.count === 0 && r.wins === 0 && r.net === 0));
+});
+
+test('byVerdict: fixed order, buckets, manual rows -> no setup', () => {
+  const live = (verdict, net, extra = {}) => ({
+    source: 'live', status: 'CLOSED', closeTime: '2026-10-05T10:00:00',
+    verdict, net, ...extra });
+  const rows = byVerdict([
+    live('go', 4), live('go', -2),
+    live('caution', 5),
+    live('no', -3), live('no', -1), live('no', 2),
+    live(null, 7),                                    // never scored
+    { source: 'manual', entry: 1, exit: 2, size: 1,
+      date: '2026-10-05T09:00' },                     // manual win: +1
+    live('no', 99, { status: 'OPEN' }),               // open — excluded
+  ]);
+  assert.deepEqual(rows.map((r) => r.setup),
+    ['GO', 'CAUTION', 'NO', 'no setup']);
+  const [go, caution, no, none] = rows;
+  assert.deepEqual([go.count, go.wins, go.net], [2, 1, 2]);
+  assert.deepEqual([caution.count, caution.wins, caution.net], [1, 1, 5]);
+  assert.deepEqual([no.count, no.wins, no.net], [3, 1, -2]);
+  // unscored(7) + manual(1) = 8 net over 2 rows
+  assert.deepEqual([none.count, none.wins, none.net], [2, 2, 8]);
+});
+
+test('byVerdict: empty input still returns the four rows at n=0', () => {
+  const rows = byVerdict([]);
+  assert.deepEqual(rows.map((r) => r.setup),
+    ['GO', 'CAUTION', 'NO', 'no setup']);
   assert.ok(rows.every((r) => r.count === 0 && r.wins === 0 && r.net === 0));
 });
 

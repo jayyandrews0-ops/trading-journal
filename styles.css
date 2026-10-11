@@ -220,6 +220,9 @@ html, body {
 .badge-avoid { background: rgba(210, 153, 34, .18); color: var(--amber); }
 .badge-setup { background: var(--bg-3); color: var(--text-dim); }
 .badge-held { background: rgba(248, 81, 73, .18); color: var(--red); }
+.badge-vgo { background: rgba(63, 185, 80, .18); color: var(--green); }
+.badge-vcaution { background: rgba(210, 153, 34, .18); color: var(--amber); }
+.badge-vno { background: rgba(248, 81, 73, .18); color: var(--red); }
 
 .pos { color: var(--green); }
 .neg { color: var(--red); }

@@ -628,6 +628,30 @@ export function bySetupClass(rows) {
   return SETUP_CLASS_ORDER.map(([key]) => buckets.get(key));
 }
 
+// Closed rows bucketed by the desk verdict their matched setup carried
+// at activation, in a fixed display order; every bucket renders even
+// when empty. Only live rows carry a verdict — manual rows and
+// unmatched live rows are "no setup".
+const VERDICT_ORDER = [
+  ['go', 'GO'],
+  ['caution', 'CAUTION'],
+  ['no', 'NO'],
+  ['none', 'no setup'],
+];
+export function byVerdict(rows) {
+  const buckets = new Map(VERDICT_ORDER.map(
+    ([key, label]) => [key, { setup: label, count: 0, wins: 0, net: 0 }]));
+  for (const t of rows.filter(isClosed)) {
+    const v = t.source === 'live' ? t.verdict : null;
+    const b = buckets.get(buckets.has(v) ? v : 'none');
+    const p = tradeNet(t) ?? 0;
+    b.count++;
+    if (p > 0) b.wins++;
+    b.net += p;
+  }
+  return VERDICT_ORDER.map(([key]) => buckets.get(key));
+}
+
 // Closed live rows that were still open when their matched setup
 // invalidated — the discipline number the record keeps flagging.
 export function heldThroughStop(rows) {

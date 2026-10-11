@@ -6,7 +6,7 @@ import { pnl, rMultiple, outcome, summarize, equitySeries, bySetup, byGrade, roi
   SETUP_FIELDS, groupByDay, dayLabel, riskStatus, monthGrid, dayState,
   isClosed, tradeNet, weekKey, shiftDay, shiftMonth, weekDays, weekTitle,
   countResults, summaryText, byHour, flagReentries,
-  ordinal, bySetupClass, heldThroughStop } from './calc.js';
+  ordinal, bySetupClass, byVerdict, heldThroughStop } from './calc.js';
 import { buildPositions, accountSummary, liveEquitySeries,
   closePrice, liveFloating, contractSize, fxDivisor,
   parseBrokerTime } from './live.js';
@@ -191,6 +191,8 @@ function liveRows() {
       // Platform setup-class fields; renamed where they would collide with
       // the user's own annotation fields (grade).
       setup_class: q?.setup_class ?? null,
+      verdict: q?.verdict_at_activation ?? null,
+      verdict_line: q?.verdict_line_at_activation ?? null,
       exit_vs_setup: q?.exit_vs_setup ?? null,
       touch_number: q?.touch_number ?? null,
       setup_tf: q?.timeframe ?? null,
@@ -683,6 +685,19 @@ function setupClassBadge(t) {
   return b;
 }
 
+// The desk verdict the matched setup carried when it activated — GO /
+// CAUTION / NO in the same pill family as the setup-class chip. null
+// when the trade matched nothing or was never scored.
+function verdictBadge(t) {
+  if (!['go', 'caution', 'no'].includes(t.verdict)) return null;
+  const b = document.createElement('span');
+  b.className = `badge badge-v${t.verdict}`;
+  b.textContent = t.verdict.toUpperCase();
+  b.title = t.verdict_line
+    ? `verdict at activation — ${t.verdict_line}` : 'verdict at activation';
+  return b;
+}
+
 function buildTradeLi(t, reentry) {
     const li = document.createElement('li');
     const row = document.createElement('button');
@@ -712,6 +727,8 @@ function buildTradeLi(t, reentry) {
     if (isLive) {
       const cls = setupClassBadge(t);
       if (cls) badgeWrap.append(' ', cls);
+      const vb = verdictBadge(t);
+      if (vb) badgeWrap.append(' ', vb);
       if (t.exit_vs_setup === 'held_through_invalidation') {
         const held = document.createElement('span');
         held.className = 'badge badge-held';
@@ -999,6 +1016,13 @@ function fillAnnotateSummary(p) {
     l5.className = 'as-line';
     l5.textContent = `Setup: ${clsLine}`;
     el.append(l5);
+  }
+  if (p.verdict) {
+    const lv = document.createElement('div');
+    lv.className = 'as-line';
+    lv.textContent = `Verdict at activation: ${p.verdict.toUpperCase()}`
+      + (p.verdict_line ? ` — ${p.verdict_line}` : '');
+    el.append(lv);
   }
   if (p.exit_vs_setup === 'held_through_invalidation') {
     const l6 = document.createElement('div');
@@ -1296,6 +1320,7 @@ function renderStats() {
   renderBreakdown('#setup-table', '#setup-empty', bySetup(rows));
   renderBreakdown('#grade-table', '#grade-empty', byGrade(rows));
   renderClassTable(bySetupClass(rows));
+  renderVerdictTable(byVerdict(rows));
 }
 
 // Fixed four rows — wanted / other setup / avoid set / no setup — n · win%
@@ -1303,6 +1328,25 @@ function renderStats() {
 // whole classification.
 function renderClassTable(rows) {
   const tbody = document.querySelector('#class-table tbody');
+  tbody.innerHTML = '';
+  for (const r of rows) {
+    const tr = document.createElement('tr');
+    const wr = r.count ? (r.wins / r.count * 100).toFixed(0) + '%' : '—';
+    const net = r.count ? fmtPnl(r.net) : '—';
+    for (const text of [r.setup, String(r.count), wr, net]) {
+      const td = document.createElement('td');
+      td.textContent = text;
+      tr.append(td);
+    }
+    if (r.count) tr.lastChild.className = pnlClass(r.net);
+    tbody.append(tr);
+  }
+}
+
+// Fixed four rows — GO / CAUTION / NO / no setup — the verdict each
+// closed trade's matched setup carried at activation.
+function renderVerdictTable(rows) {
+  const tbody = document.querySelector('#verdict-table tbody');
   tbody.innerHTML = '';
   for (const r of rows) {
     const tr = document.createElement('tr');

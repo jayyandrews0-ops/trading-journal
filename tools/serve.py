@@ -160,6 +160,9 @@ class Handler(SimpleHTTPRequestHandler):
                     "chased": t.get("chased"),
                     "status": t.get("excursion_source_status"),
                     "setup_class": t.get("setup_class"),
+                    "verdict_at_activation": t.get("verdict_at_activation"),
+                    "verdict_line_at_activation":
+                        t.get("verdict_line_at_activation"),
                     "exit_vs_setup": t.get("exit_vs_setup"),
                     "touch_number": t.get("touch_number"),
                     "timeframe": t.get("timeframe"),
