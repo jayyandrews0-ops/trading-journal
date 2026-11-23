@@ -733,7 +733,7 @@ function buildTradeLi(t, reentry) {
     main.className = 'trade-main';
     const sym = document.createElement('div');
     sym.className = 'trade-symbol';
-    sym.textContent = t.symbol;
+    sym.hidden = true;
     const sub = document.createElement('div');
     sub.className = 'trade-sub';
     sub.textContent = [
