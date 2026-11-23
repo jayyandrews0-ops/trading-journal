@@ -13,19 +13,11 @@ import { buildPositions, accountSummary, liveEquitySeries,
 
 const $ = (sel) => document.querySelector(sel);
 
-// Currency-aware money formatting; falls back to plain numbers when the
-// currency code is missing/invalid, and adds "+" manually on old Safari.
-function makeMoneyFmt(currency, signed) {
+// Money as plain numbers (no currency symbol); adds "+" manually on old Safari.
+function makeMoneyFmt(signed) {
   const opts = { minimumFractionDigits: 2, maximumFractionDigits: 2 };
   if (signed) opts.signDisplay = 'always';
-  let fmt;
-  try {
-    fmt = currency
-      ? new Intl.NumberFormat(undefined, { style: 'currency', currency, ...opts })
-      : new Intl.NumberFormat(undefined, opts);
-  } catch {
-    fmt = new Intl.NumberFormat(undefined, opts);
-  }
+  const fmt = new Intl.NumberFormat(undefined, opts);
   if (signed && fmt.resolvedOptions && fmt.resolvedOptions().signDisplay !== 'always') {
     const base = fmt;
     return { format: (n) => (n > 0 ? '+' : '') + base.format(n) };
@@ -96,8 +88,8 @@ for (const id of ['#rule-daily', '#rule-weekly', '#rule-reentry']) {
   });
 }
 
-let moneyFmt = makeMoneyFmt(account.currency, true);   // signed: P&L
-let balFmt = makeMoneyFmt(account.currency, false);    // unsigned: balances
+let moneyFmt = makeMoneyFmt(true);   // signed: P&L
+let balFmt = makeMoneyFmt(false);    // unsigned: balances
 const dateFmt = new Intl.DateTimeFormat(undefined, {
   month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
 });
@@ -126,7 +118,7 @@ function pnlClass(p) {
   return p > 0 ? 'pos' : 'neg';
 }
 
-// Signed money, but an exact zero is unsigned ("£0.00", not "+£0.00").
+// Signed money, but an exact zero is unsigned ("0.00", not "+0.00").
 function fmtCost(v) {
   if (v == null) return '—';
   return v === 0 ? balFmt.format(0) : fmtPnl(v);
@@ -168,8 +160,8 @@ function activeCurrency() {
 }
 
 function refreshFormatters() {
-  moneyFmt = makeMoneyFmt(activeCurrency(), true);
-  balFmt = makeMoneyFmt(activeCurrency(), false);
+  moneyFmt = makeMoneyFmt(true);
+  balFmt = makeMoneyFmt(false);
 }
 
 async function loadAnnotations() {
@@ -461,8 +453,8 @@ document.querySelectorAll('.tab').forEach((btn) => {
 
 function persistAccount() {
   localStorage.setItem(ACCOUNT_KEY, JSON.stringify(account));
-  moneyFmt = makeMoneyFmt(account.currency, true);
-  balFmt = makeMoneyFmt(account.currency, false);
+  moneyFmt = makeMoneyFmt(true);
+  balFmt = makeMoneyFmt(false);
 }
 
 function fillAccountForm() {
@@ -1285,7 +1277,7 @@ function renderStats() {
     statCard('Streak', s.streak ? `${s.streak.count} ${s.streak.type}` : '—'),
     statCard('Best', s.best ? fmtPnl(s.best.pnl) : '—', s.best ? s.best.trade.symbol : ''),
     statCard('Worst', s.worst ? fmtPnl(s.worst.pnl) : '—', s.worst ? s.worst.trade.symbol : ''),
-    // Costs are negative numbers; exact zero reads "£0.00", not "+£0.00".
+    // Costs are negative numbers; exact zero reads "0.00", not "+0.00".
     statCard('Commission', s.closed ? fmtCost(s.commission) : '—'),
     statCard('Swap', s.closed && s.hasSwap ? fmtCost(s.swap) : '—'),
     statCard('Expectancy',
@@ -1538,7 +1530,7 @@ $('#cal-grid').addEventListener('click', (e) => {
 });
 
 // Funded-account drawdown panel on Calendar: balance/equity/period-start
-// cards plus a "£ left" bar per rule, measured against live equity.
+// cards plus a "left" bar per rule, measured against live equity.
 function renderDrawdown() {
   const card = $('#drawdown-card');
   let points, equity, today;
@@ -1772,7 +1764,7 @@ function drawHours() {
 // Classic equity curve: x = trade index (0 = starting balance), y = balance.
 // Horizontal gridlines with value labels in the left gutter, trade-index
 // ticks along the bottom, a dashed baseline at the start value carrying the
-// only non-axis label ("Deposit £103.10" / "Start …"), a plain polyline,
+// only non-axis label ("Deposit 103.10" / "Start …"), a plain polyline,
 // and a dotted connector to live equity when it differs from the balance.
 function drawEquityCurve(ctx, w, h, series, equity, isLive) {
   const padL = 46, padR = 10, padT = 10, padB = 16;
