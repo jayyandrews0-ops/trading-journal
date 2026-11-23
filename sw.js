@@ -1,5 +1,5 @@
 // Service worker: cache-first app shell, network-first for page navigations.
-const CACHE_VERSION = 'trading-journal-v21';
+const CACHE_VERSION = 'trading-journal-v22';
 
 const APP_SHELL = [
   './',
